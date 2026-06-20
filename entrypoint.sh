@@ -12,6 +12,7 @@ BACKUP_SCRIPT="/app/komari_bak.sh"
 RESTORE_SCRIPT="/app/restore.sh"
 RENEW_SCRIPT="/app/renew.sh"
 SUB_LINK_SCRIPT="/app/sub_link.sh"
+CLOUDFLARED_BIN="/app/bin/cloudflared"
 CADDYFILE="/app/Caddyfile"
 SUPERVISOR_CONF="/etc/supervisor/conf.d/damon.conf"
 WORK_DIR="/app"
@@ -89,10 +90,7 @@ protocol: http2
 
 ingress:
   - hostname: ARGO_DOMAIN_PLACEHOLDER
-    service: https://localhost:CADDY_PROXY_PORT_PLACEHOLDER
-    originRequest:
-      http2Origin: true
-      noTLSVerify: true
+    service: http://localhost:CADDY_PROXY_PORT_PLACEHOLDER
   - service: http_status:404
 ARGO_EOF
     
@@ -101,12 +99,12 @@ ARGO_EOF
     sed -i "s|ARGO_DOMAIN_PLACEHOLDER|$ARGO_DOMAIN|g" $WORK_DIR/argo.yml
     sed -i "s|CADDY_PROXY_PORT_PLACEHOLDER|$CADDY_PROXY_PORT|g" $WORK_DIR/argo.yml
     
-    CLOUDFLARED_CMD="cloudflared tunnel --edge-ip-version auto --config $WORK_DIR/argo.yml run"
+    CLOUDFLARED_CMD="$CLOUDFLARED_BIN tunnel --edge-ip-version auto --config $WORK_DIR/argo.yml run"
     hint "Cloudflare 隧道配置完成（JSON 格式）"
     
 elif [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ ^ey[A-Z0-9a-z=]{120,250}$ ]]; then
     # Token 格式处理
-    CLOUDFLARED_CMD="cloudflared tunnel --edge-ip-version auto --protocol http2 run --token ${KOMARI_CLOUDFLARED_TOKEN}"
+    CLOUDFLARED_CMD="$CLOUDFLARED_BIN tunnel --edge-ip-version auto --protocol http2 run --token ${KOMARI_CLOUDFLARED_TOKEN}"
     hint "Cloudflare 隧道配置完成（Token 格式）"
     
 else
@@ -139,9 +137,12 @@ info "Caddy v$CADDY_LATEST 安装完成" || error "Caddy 下载失败"
 
 # 下载 Cloudflared 二进制文件
 info "正在下载 Cloudflared..."
-wget -q --show-progress https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH} -O /usr/local/bin/cloudflared && \
-chmod +x /usr/local/bin/cloudflared && \
+mkdir -p "$(dirname "$CLOUDFLARED_BIN")" && \
+wget -q --show-progress https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH} -O "$CLOUDFLARED_BIN" && \
+chmod +x "$CLOUDFLARED_BIN" && \
 info "Cloudflared 安装完成" || error "Cloudflared 下载失败"
+# 避免 Komari 内置 cloudflared 管理器启动第二份隧道
+rm -f /usr/local/bin/cloudflared /usr/bin/cloudflared
 
 # 生成 Caddyfile（如果不存在则创建，否则使用现有配置）
 if [ ! -f "$CADDYFILE" ]; then
@@ -155,11 +156,10 @@ if [ -n "$UUID" ]; then
     cat >> "$CADDYFILE" << 'EOF'
     # 订阅链接访问 (UUID 路径)
     handle /UUID_PLACEHOLDER {
+        rewrite * /list.log
         file_server {
             root /tmp
-            browse
         }
-        rewrite * /list.log
     }
 
 EOF
@@ -173,8 +173,8 @@ fi
 # 添加默认反代到 Komari 面板
 cat >> "$CADDYFILE" << 'EOF'
     # 反代到 Komari 面板（默认路由）
-    reverse_proxy / {
-        to localhost:25774
+    handle {
+        reverse_proxy localhost:25774
     }
 }
 EOF
@@ -207,7 +207,7 @@ stderr_logfile=/dev/null
 stdout_logfile=/dev/null
 
 [program:komari]
-command=/app/komari server -l 0.0.0.0:25774
+command=/bin/sh -c 'unset KOMARI_CLOUDFLARED_TOKEN KOMARI_CLOUDFLARED_BIN; exec /app/komari server -l 0.0.0.0:25774'
 autostart=true
 autorestart=true
 stderr_logfile=/dev/null

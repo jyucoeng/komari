@@ -130,18 +130,19 @@ Caddy（反向代理，8001 端口）
 
 ```
 域名: your-argo-domain.com
-服务: https://localhost:8001
+服务: http://localhost:8001
 ```
 
 **说明**：
 - Caddy 在容器内监听 **8001 端口**（默认 `CADDY_PROXY_PORT`）
 - Cloudflare 隧道将 `https://your-argo-domain.com/` 转发到容器内的 Caddy
+- 隧道到容器内 Caddy 使用 HTTP，公网访问仍由 Cloudflare 提供 HTTPS
 - 所有流量通过隧道加密传输，不需要暴露额外的服务器端口
 - 用户访问 `https://your-argo-domain.com/` → Komari 面板
 - 当设置了 `UUID` 时，用户可访问 `https://your-argo-domain.com/UUID` → 获取 VLESS/VMESS 订阅链接
 - 当未设置 `UUID` 时，仅可访问面板，订阅功能不可用
 
-**如果改变 Caddy 端口**（如 `-e CADDY_PROXY_PORT="9000"`），需要同步更新 Cloudflare 隧道配置为 `https://localhost:9000`。
+**如果改变 Caddy 端口**（如 `-e CADDY_PROXY_PORT="9000"`），需要同步更新 Cloudflare 隧道配置为 `http://localhost:9000`。
 
 ## 备份和还原
 
