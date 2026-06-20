@@ -92,7 +92,7 @@ check_env() {
 
 lock_mtime() {
     local mtime
-    mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || true)
+    mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || ls -ldn --time-style=+%s "$LOCK_DIR" 2>/dev/null | awk '{print $6}' || true)
     if printf "%s" "$mtime" | grep -Eq '^[0-9]+$'; then
         printf '%s\n' "$mtime"
     fi

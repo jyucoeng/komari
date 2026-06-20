@@ -7,7 +7,8 @@ hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 
 # 定义文件路径
 CRON_ENV_FILE="/app/cron_env.sh"
-CRONTAB_FILE="/etc/crontabs/root"
+CRONTAB_DIR="/etc/crontabs"
+CRONTAB_FILE="$CRONTAB_DIR/root"
 BACKUP_SCRIPT="/app/komari_bak.sh"
 RESTORE_SCRIPT="/app/restore.sh"
 RENEW_SCRIPT="/app/renew.sh"
@@ -19,6 +20,24 @@ WORK_DIR="/app"
 
 # 首次运行时执行以下流程，再次运行时存在 damon.conf 文件，直接到最后一步
 if [ ! -s "$SUPERVISOR_CONF" ]; then
+
+require_env() {
+    local name="$1"
+    local value="${!name:-}"
+    if [ -z "$value" ]; then
+        error "错误：$name 是必需的"
+    fi
+}
+
+reject_placeholder() {
+    local name="$1"
+    local value="${!name:-}"
+    case "$value" in
+        your_github_username|your_private_repo_name|your_github_personal_access_token|your_github_email@example.com|yourusername|yourpassword|your-argo-domain.com|eyJxxxxx)
+            error "错误：$name 仍是示例占位值，请设置真实值"
+            ;;
+    esac
+}
 
 # 设置时区（支持通过环境变量自定义，默认 UTC）
 TZ="${TZ:-UTC}"
@@ -34,13 +53,17 @@ DNS_SERVERS="${DNS_SERVERS:-127.0.0.11 8.8.4.4 223.5.5.5 2001:4860:4860::8844 24
 } > /etc/resolv.conf
 
 # 检查必需的环境变量
-if [ -z "$ARGO_DOMAIN" ] || [ -z "$KOMARI_CLOUDFLARED_TOKEN" ]; then
-    error "错误：ARGO_DOMAIN 和 KOMARI_CLOUDFLARED_TOKEN 是必需的"
-fi
+for required_var in ADMIN_USERNAME ADMIN_PASSWORD ARGO_DOMAIN KOMARI_CLOUDFLARED_TOKEN GH_BACKUP_USER GH_REPO GH_PAT GH_EMAIL; do
+    require_env "$required_var"
+    reject_placeholder "$required_var"
+done
 
 # 设置备份相关的环境变量默认值（使用 UTC 时间）
 BACKUP_TIME=${BACKUP_TIME:-"0 20 * * *"}
 BACKUP_DAYS=${BACKUP_DAYS:-"10"}
+if ! echo "$BACKUP_DAYS" | grep -Eq '^[1-9][0-9]*$'; then
+    error "错误：BACKUP_DAYS 必须是大于等于 1 的整数"
+fi
 
 # 配置 Caddy 端口
 CADDY_PROXY_PORT=${CADDY_PROXY_PORT:-'8001'}
@@ -70,6 +93,7 @@ echo "export SUB_NAME=\"$SUB_NAME\"" >> "$CRON_ENV_FILE"
 echo "export CADDY_PROXY_PORT=\"$CADDY_PROXY_PORT\"" >> "$CRON_ENV_FILE"
 chmod 600 "$CRON_ENV_FILE"
 
+mkdir -p "$CRONTAB_DIR"
 # 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
 echo "$BACKUP_TIME . $CRON_ENV_FILE && $BACKUP_SCRIPT bak" > "$CRONTAB_FILE"
 
@@ -87,7 +111,8 @@ if [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ TunnelSecret ]]; then
     # JSON 格式处理
     KOMARI_CLOUDFLARED_TOKEN_PROCESSED="$KOMARI_CLOUDFLARED_TOKEN"
     
-    echo "$KOMARI_CLOUDFLARED_TOKEN_PROCESSED" > $WORK_DIR/argo.json
+    echo "$KOMARI_CLOUDFLARED_TOKEN_PROCESSED" > "$WORK_DIR/argo.json"
+    chmod 600 "$WORK_DIR/argo.json"
 
     # 从 JSON 凭据中提取 Tunnel ID
     TUNNEL_ID=$(jq -r '.TunnelID // .TunnelId // .tunnel_id // empty' "$WORK_DIR/argo.json" 2>/dev/null)
@@ -96,7 +121,7 @@ if [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ TunnelSecret ]]; then
     fi
     
     # 生成 argo.yml 配置文件
-    cat > $WORK_DIR/argo.yml << 'ARGO_EOF'
+    cat > "$WORK_DIR/argo.yml" << 'ARGO_EOF'
 tunnel: TUNNEL_ID_PLACEHOLDER
 credentials-file: /app/argo.json
 protocol: http2
@@ -108,9 +133,9 @@ ingress:
 ARGO_EOF
     
     # 替换占位符
-    sed -i "s|TUNNEL_ID_PLACEHOLDER|$TUNNEL_ID|g" $WORK_DIR/argo.yml
-    sed -i "s|ARGO_DOMAIN_PLACEHOLDER|$ARGO_DOMAIN|g" $WORK_DIR/argo.yml
-    sed -i "s|CADDY_PROXY_PORT_PLACEHOLDER|$CADDY_PROXY_PORT|g" $WORK_DIR/argo.yml
+    sed -i "s|TUNNEL_ID_PLACEHOLDER|$TUNNEL_ID|g" "$WORK_DIR/argo.yml"
+    sed -i "s|ARGO_DOMAIN_PLACEHOLDER|$ARGO_DOMAIN|g" "$WORK_DIR/argo.yml"
+    sed -i "s|CADDY_PROXY_PORT_PLACEHOLDER|$CADDY_PROXY_PORT|g" "$WORK_DIR/argo.yml"
     
     CLOUDFLARED_CMD="$CLOUDFLARED_BIN tunnel --edge-ip-version auto --config $WORK_DIR/argo.yml run"
     hint "Cloudflare 隧道配置完成（JSON 格式）"
@@ -141,19 +166,27 @@ case "$(uname -m)" in
 esac
 
 # 下载 Caddy 二进制文件
-info "正在下载 Caddy v$CADDY_LATEST..."
-wget -q --show-progress https://github.com/caddyserver/caddy/releases/download/v${CADDY_LATEST}/caddy_${CADDY_LATEST}_linux_${ARCH}.tar.gz -O /tmp/caddy.tar.gz && \
-tar xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy && \
-chmod +x /usr/local/bin/caddy && \
-rm -f /tmp/caddy.tar.gz && \
-info "Caddy v$CADDY_LATEST 安装完成" || error "Caddy 下载失败"
+if ! command -v caddy >/dev/null 2>&1 || ! caddy version 2>/dev/null | grep -q "v$CADDY_LATEST"; then
+    info "正在下载 Caddy v$CADDY_LATEST..."
+    wget -q --show-progress https://github.com/caddyserver/caddy/releases/download/v${CADDY_LATEST}/caddy_${CADDY_LATEST}_linux_${ARCH}.tar.gz -O /tmp/caddy.tar.gz && \
+    tar xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy && \
+    chmod +x /usr/local/bin/caddy && \
+    rm -f /tmp/caddy.tar.gz && \
+    info "Caddy v$CADDY_LATEST 安装完成" || error "Caddy 下载失败"
+else
+    info "Caddy v$CADDY_LATEST 已安装，跳过下载"
+fi
 
 # 下载 Cloudflared 二进制文件
-info "正在下载 Cloudflared..."
-mkdir -p "$(dirname "$CLOUDFLARED_BIN")" && \
-wget -q --show-progress https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH} -O "$CLOUDFLARED_BIN" && \
-chmod +x "$CLOUDFLARED_BIN" && \
-info "Cloudflared 安装完成" || error "Cloudflared 下载失败"
+if [ ! -x "$CLOUDFLARED_BIN" ]; then
+    info "正在下载 Cloudflared..."
+    mkdir -p "$(dirname "$CLOUDFLARED_BIN")" && \
+    wget -q --show-progress https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH} -O "$CLOUDFLARED_BIN" && \
+    chmod +x "$CLOUDFLARED_BIN" && \
+    info "Cloudflared 安装完成" || error "Cloudflared 下载失败"
+else
+    info "Cloudflared 已安装，跳过下载"
+fi
 # 避免 Komari 内置 cloudflared 管理器启动第二份隧道
 rm -f /usr/local/bin/cloudflared /usr/bin/cloudflared
 
@@ -214,7 +247,7 @@ logfile=/dev/null
 pidfile=/run/supervisord.pid
 
 [program:cron]
-command=/usr/sbin/crond -f
+command=/bin/busybox crond -f -c /etc/crontabs
 autostart=true
 autorestart=true
 stderr_logfile=/dev/stderr
