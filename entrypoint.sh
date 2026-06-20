@@ -269,6 +269,16 @@ nodaemon=true
 logfile=/dev/null
 pidfile=/run/supervisord.pid
 
+[unix_http_server]
+file=/run/supervisor.sock
+chmod=0700
+
+[supervisorctl]
+serverurl=unix:///run/supervisor.sock
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
 [program:cron]
 command=/bin/busybox crond -f -c /etc/crontabs
 autostart=true

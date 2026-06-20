@@ -327,12 +327,29 @@ replace_data_dir() {
 }
 
 restart_komari_if_possible() {
+    local pid
+
     if command -v supervisorctl >/dev/null 2>&1; then
-        supervisorctl restart komari >/dev/null 2>&1 && {
-            log "已重启 Komari 进程以加载还原数据"
+        if supervisorctl -c /etc/supervisor.d/damon.conf restart komari >/dev/null 2>&1; then
+            log "已通过 Supervisor 重启 Komari 进程以加载还原数据"
+            return 0
+        fi
+        log "Supervisor 重启 Komari 失败，尝试发送 TERM 让 Supervisor 自动拉起。"
+    fi
+
+    if command -v pidof >/dev/null 2>&1; then
+        pid=$(pidof komari 2>/dev/null || true)
+    else
+        pid=$(pgrep -x komari 2>/dev/null || true)
+    fi
+
+    if [ -n "$pid" ]; then
+        kill -TERM $pid >/dev/null 2>&1 && {
+            log "已向 Komari 进程发送 TERM，等待 Supervisor 自动重启。"
             return 0
         }
     fi
+
     log "未能自动重启 Komari；如果面板未立即生效，请重启容器。"
 }
 
