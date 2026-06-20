@@ -42,6 +42,7 @@ docker run -d \
 
 - `GH_BACKUP_USER` - GitHub 用户名
 - `GH_REPO` - 备份仓库名（私有）
+- `GH_BACKUP_BRANCH` - 备份仓库分支，默认 `main`
 - `GH_PAT` - GitHub Personal Access Token（需要 repo 权限）
 - `GH_EMAIL` - Git 提交邮箱
 
@@ -61,6 +62,7 @@ docker run -d \
 
 - `BACKUP_TIME` - Cron 表达式，默认 `0 20 * * *`（UTC 20:00）
 - `BACKUP_DAYS` - 保留备份天数，默认 `10`
+- `KOMARI_LOCK_TIMEOUT_SECONDS` - 备份/还原任务锁超时时间，默认 `3600` 秒
 - `NO_AUTO_RENEW` - 禁用脚本自动更新（设置为 `1` 则禁用）
 
 ### Caddy 反代配置
@@ -155,11 +157,21 @@ Caddy（反向代理，8001 端口）
 
 ### 自动备份
 
-根据 `BACKUP_TIME` 环境变量自动定时备份，备份数据包括面板配置、主题设置、服务器列表等。
+根据 `BACKUP_TIME` 环境变量自动定时备份，备份数据包括面板配置、主题设置、服务器列表等。备份脚本会先复制一份数据快照，再把快照打包为 `komari-YYYY-MM-DD-HHMMSS.tar.gz` 上传到私有仓库。
+
+备份仓库会同时维护：
+
+- `latest.json` - 机器读取的最新备份索引，包含文件名、大小、sha256 和创建时间
+- `README.md` - 给人看的最新备份摘要
+- `komari-*.tar.gz` - 实际备份包
+
+如果容器内有 `sqlite3`，脚本会对 `.db`、`.sqlite`、`.sqlite3` 文件先执行校验并生成一致性快照，减少运行中数据库被直接打包导致损坏的风险。备份和还原共用任务锁，避免 cron 同时执行时互相覆盖。
 
 ### 自动还原
 
-容器会每分钟检测 Github 备份库中的内容，如发现新的备份文件，会自动下载并还原。
+容器会每分钟读取 GitHub 备份仓库中的 `latest.json`。自动还原不只比较文件名，还会比较 sha256；只有发现新的文件名或校验值变化时才下载并还原。
+
+还原流程会先下载到临时文件，校验文件大小、sha256、tar 完整性和包内路径，确认只包含普通文件/目录且都在 `data/` 下后，才会替换现有数据目录。替换失败时会尝试恢复旧数据目录，避免坏包或下载失败先删掉现有数据。
 
 **还原配置**：
 - 需要设置：`GH_BACKUP_USER`、`GH_REPO`、`GH_EMAIL`、`GH_PAT`

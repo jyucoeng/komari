@@ -3,12 +3,13 @@
 #===============================================================
 #           Komari Dashboard Auto-Restore Script
 #
-# 此脚本用于自动检测和还原 Komari 面板备份数据
+# 此脚本用于自动检测和还原 Komari 面板备份数据。
 # ---------------------------------------------------------------
 # 功能:
-#   - 每分钟检测 GitHub 备份库中的最新备份文件
-#   - 与本地记录比对，如果有新文件则自动还原
-#   - 支持手动指定备份文件还原
+#   - 每分钟读取 GitHub 备份库中的 latest.json。
+#   - 使用文件名 + sha256 比对，避免同名覆盖或坏包误判。
+#   - 下载、校验、解包到临时目录后再替换 data，避免还原失败时删库。
+#   - 支持手动指定备份文件还原。
 #
 # 使用方法:
 #   - 自动还原（Supervisor/Cron 调用）: bash restore.sh a
@@ -16,11 +17,14 @@
 #   - 强制还原（忽略本地记录）: bash restore.sh f
 #===============================================================
 
+set -o pipefail
+
 #---------------------------------------------------------------
 # GitHub 仓库配置
 #---------------------------------------------------------------
 GH_BACKUP_USER="${GH_BACKUP_USER:-}"
 GH_REPO="${GH_REPO:-}"
+GH_BACKUP_BRANCH="${GH_BACKUP_BRANCH:-main}"
 GH_PAT="${GH_PAT:-}"
 GH_EMAIL="${GH_EMAIL:-}"
 
@@ -28,188 +32,432 @@ GH_EMAIL="${GH_EMAIL:-}"
 # 面板工作目录配置
 #---------------------------------------------------------------
 WORK_DIR="${WORK_DIR:-/app}"
-DATA_DIR="${WORK_DIR}/data"
-RESTORE_FLAG_FILE="/tmp/last_restore"
-RESTORE_LOG="/tmp/restore.log"
+DATA_DIR="${DATA_DIR:-${WORK_DIR}/data}"
+RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore}}"
+RESTORE_LOG="${RESTORE_LOG:-/tmp/restore.log}"
+LOCK_DIR="${KOMARI_BACKUP_LOCK_DIR:-/tmp/komari-backup-restore.lock}"
+LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-3600}"
 
 #---------------------------------------------------------------
 # 脚本核心逻辑
 #---------------------------------------------------------------
+info() { echo -e "\033[32m\033[01m$*\033[0m"; }
+error() { echo -e "\033[31m\033[01m$*\033[0m" >&2; exit 1; }
+hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 
-# 颜色定义
-info() { echo -e "\033[32m\033[01m$*\033[0m"; }     # 绿色
-error() { echo -e "\033[31m\033[01m$*\033[0m" && exit 1; } # 红色
-hint() { echo -e "\033[33m\033[01m$*\033[0m"; }     # 黄色
+DOWNLOAD_PATH=""
+EXTRACT_DIR=""
+OLD_DATA_DIR=""
+LOCK_ACQUIRED="0"
 
-# 日志函数
+cleanup() {
+    [ -n "$DOWNLOAD_PATH" ] && rm -f "$DOWNLOAD_PATH"
+    [ -n "$EXTRACT_DIR" ] && [ -d "$EXTRACT_DIR" ] && rm -rf "$EXTRACT_DIR"
+    if [ -n "$OLD_DATA_DIR" ] && [ -d "$OLD_DATA_DIR" ]; then
+        rm -rf "$OLD_DATA_DIR"
+    fi
+    if [ "$LOCK_ACQUIRED" = "1" ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
 log() {
+    mkdir -p "$(dirname "$RESTORE_LOG")" 2>/dev/null || true
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*" >> "$RESTORE_LOG"
 }
 
-# 检查必需的环境变量
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || error "缺少必需命令: $1"
+}
+
 check_env() {
     if [ -z "$GH_BACKUP_USER" ] || [ -z "$GH_REPO" ] || [ -z "$GH_PAT" ]; then
         log "错误：备份相关环境变量未全部设置 (GH_BACKUP_USER, GH_REPO, GH_PAT)"
-        exit 0  # 不报错退出，因为这是可选功能
+        exit 0
+    fi
+    if ! printf "%s" "$GH_BACKUP_USER" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
+        error "GH_BACKUP_USER 只能包含字母、数字、下划线、点和短横线。"
+    fi
+    if ! printf "%s" "$GH_REPO" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
+        error "GH_REPO 只能包含字母、数字、下划线、点和短横线。"
+    fi
+    if ! printf "%s" "$GH_BACKUP_BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' ||
+        printf "%s" "$GH_BACKUP_BRANCH" | grep -Eq '(^-|^/|/$|\.\.|//|@\{|\.lock$)'; then
+        error "GH_BACKUP_BRANCH 不合法。"
     fi
 }
 
-# 获取远程仓库中最新的备份文件名（带重试机制）
-get_latest_backup_filename() {
-    local max_attempts=3
-    local attempt=1
-    local result=""
-    
-    while [ $attempt -le $max_attempts ]; do
-        result=$(curl -s -H "Authorization: token $GH_PAT" \
-            "https://api.github.com/repos/$GH_BACKUP_USER/$GH_REPO/contents/" \
-            2>/dev/null | grep -oE 'komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz' | sort -r | head -n 1)
-        
-        if [ -n "$result" ]; then
-            echo "$result"
+lock_mtime() {
+    stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0
+}
+
+acquire_lock() {
+    if [ -d "$LOCK_DIR" ]; then
+        now=$(date +%s)
+        mtime=$(lock_mtime)
+        if [ "$mtime" -gt 0 ] && [ $((now - mtime)) -gt "$LOCK_TIMEOUT_SECONDS" ]; then
+            log "检测到过期任务锁，正在清理"
+            rm -rf "$LOCK_DIR"
+        fi
+    fi
+
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        LOCK_ACQUIRED="1"
+    else
+        log "已有备份或还原任务正在运行，本次还原跳过"
+        exit 0
+    fi
+}
+
+api_get() {
+    local url="$1"
+    curl -fsSL \
+        -H "Authorization: Bearer $GH_PAT" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "$url"
+}
+
+api_get_raw() {
+    local url="$1"
+    curl -fsSL \
+        -H "Authorization: Bearer $GH_PAT" \
+        -H "Accept: application/vnd.github.raw" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "$url"
+}
+
+raw_download() {
+    local url="$1"
+    local output="$2"
+    curl -fsSL \
+        -H "Authorization: Bearer $GH_PAT" \
+        -H "Accept: application/vnd.github.raw" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "$url" \
+        -o "$output"
+}
+
+json_value() {
+    local key="$1"
+    if command -v jq >/dev/null 2>&1; then
+        jq -r ".$key // empty"
+    else
+        sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p; s/.*\"$key\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1
+    fi
+}
+
+valid_backup_filename() {
+    printf "%s" "$1" | grep -Eq '^komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz$'
+}
+
+valid_sha256() {
+    printf "%s" "$1" | grep -Eq '^[a-fA-F0-9]{64}$'
+}
+
+valid_size() {
+    printf "%s" "$1" | grep -Eq '^[1-9][0-9]*$'
+}
+
+contents_url() {
+    local path="$1"
+    printf 'https://api.github.com/repos/%s/%s/contents/%s?ref=%s\n' "$GH_BACKUP_USER" "$GH_REPO" "$path" "$GH_BACKUP_BRANCH"
+}
+
+read_latest_metadata() {
+    local metadata filename sha256 size
+    if metadata=$(api_get_raw "$(contents_url latest.json)" 2>/dev/null); then
+        filename=$(printf "%s" "$metadata" | json_value filename)
+        sha256=$(printf "%s" "$metadata" | json_value sha256)
+        size=$(printf "%s" "$metadata" | json_value size)
+        if valid_backup_filename "$filename" && valid_sha256 "$sha256" && valid_size "$size"; then
+            printf '%s %s %s\n' "$filename" "$sha256" "$size"
             return 0
         fi
-        
-        if [ $attempt -lt $max_attempts ]; then
-            log "API 调用失败，2 秒后重试 (第 $attempt 次失败)"
-            sleep 2
-        fi
-        attempt=$((attempt + 1))
-    done
-    
-    log "API 调用失败，已重试 $max_attempts 次"
-    echo ""
+        log "latest.json 存在但格式无效，拒绝自动还原。"
+        return 1
+    fi
+
+    get_latest_backup_from_listing
 }
 
-# 获取本地记录的最后还原文件名
-get_last_restore_file() {
-    if [ -f "$RESTORE_FLAG_FILE" ]; then
-        cat "$RESTORE_FLAG_FILE"
+get_latest_backup_from_listing() {
+    local contents filename file_meta sha256 size
+    contents=$(api_get "$(contents_url '')" 2>/dev/null || true)
+    filename=$(printf "%s" "$contents" | grep -oE 'komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz' | sort -r | head -n 1)
+    if [ -z "$filename" ]; then
+        printf '\n'
+        return 0
+    fi
+
+    file_meta=$(get_file_metadata "$filename") || return 0
+    sha256=$(printf "%s" "$file_meta" | awk '{print $2}')
+    size=$(printf "%s" "$file_meta" | awk '{print $3}')
+    printf '%s %s %s\n' "$filename" "$sha256" "$size"
+}
+
+get_file_metadata() {
+    local filename="$1"
+    local metadata api_sha api_size
+
+    valid_backup_filename "$filename" || error "备份文件名非法: $filename"
+
+    metadata=$(api_get "$(contents_url "$filename")" 2>/dev/null || true)
+    if [ -z "$metadata" ]; then
+        return 1
+    fi
+
+    api_sha=$(printf "%s" "$metadata" | json_value sha)
+    api_size=$(printf "%s" "$metadata" | json_value size)
+    valid_size "$api_size" || return 1
+
+    # GitHub contents API 的 sha 是 blob sha，不是文件 sha256。sha256 会在下载后计算。
+    printf '%s %s %s\n' "$filename" "${api_sha:-unknown}" "$api_size"
+}
+
+get_last_restore_state() {
+    if [ -f "$RESTORE_STATE_FILE" ]; then
+        awk 'NF >= 2 {print $1 " " $2; exit} NF == 1 {print $1 " legacy"; exit}' "$RESTORE_STATE_FILE"
     else
-        echo ""
+        printf '\n'
     fi
 }
 
-# 保存本次还原的文件名
-save_restore_file() {
-    echo "$1" > "$RESTORE_FLAG_FILE"
+save_restore_state() {
+    local backup_file="$1"
+    local backup_sha256="$2"
+    mkdir -p "$(dirname "$RESTORE_STATE_FILE")" 2>/dev/null || true
+    printf '%s %s\n' "$backup_file" "$backup_sha256" > "$RESTORE_STATE_FILE"
 }
 
-# 获取备份文件的下载 URL
-get_download_url() {
-    local filename="$1"
-    curl -s -H "Authorization: token $GH_PAT" \
-        "https://api.github.com/repos/$GH_BACKUP_USER/$GH_REPO/contents/$filename" \
-        2>/dev/null | grep -o '"download_url": "[^"]*' | cut -d'"' -f4
+validate_tar_members() {
+    local archive="$1"
+    local invalid unsupported
+
+    invalid=$(tar -tzf "$archive" 2>/dev/null | awk '
+        $0 == "data" || $0 == "data/" { next }
+        $0 ~ /^data\// && $0 !~ /(^|\/)\.\.($|\/)/ { next }
+        { print; exit }
+    ')
+    if [ -n "$invalid" ]; then
+        error "备份包包含非法路径，拒绝还原: $invalid"
+    fi
+
+    unsupported=$(tar -tvzf "$archive" 2>/dev/null | awk '
+        /^[d-]/ { next }
+        { print; exit }
+    ')
+    if [ -n "$unsupported" ]; then
+        error "备份包包含非常规文件类型，拒绝还原: $unsupported"
+    fi
 }
 
-# 执行还原操作
+verify_download() {
+    local archive="$1"
+    local expected_sha256="$2"
+    local expected_size="$3"
+    local actual_sha256 actual_size
+
+    [ -s "$archive" ] || error "下载的备份文件为空。"
+    actual_size=$(wc -c < "$archive" | tr -d ' ')
+    if valid_size "$expected_size" && [ "$actual_size" != "$expected_size" ]; then
+        error "备份文件大小不匹配，拒绝还原。期望 $expected_size，实际 $actual_size。"
+    fi
+
+    actual_sha256=$(sha256sum "$archive" | awk '{print $1}')
+    if valid_sha256 "$expected_sha256" && [ "$actual_sha256" != "$expected_sha256" ]; then
+        error "备份文件 sha256 不匹配，拒绝还原。"
+    fi
+
+    if ! tar -tzf "$archive" >/dev/null 2>&1; then
+        error "备份文件不是有效的 tar.gz，拒绝还原。"
+    fi
+    validate_tar_members "$archive"
+
+    printf '%s\n' "$actual_sha256"
+}
+
+download_backup_file() {
+    local backup_file="$1"
+    local output="$2"
+
+    raw_download "$(contents_url "$backup_file")" "$output" || error "下载备份文件失败: $backup_file"
+}
+
+replace_data_dir() {
+    local new_data="$1"
+    local old_dir
+
+    [ -d "$new_data" ] || error "备份包中没有 data 目录，拒绝还原。"
+    cd "$WORK_DIR" || error "无法进入工作目录: $WORK_DIR"
+
+    old_dir="${DATA_DIR}.old.$$"
+    OLD_DATA_DIR="$old_dir"
+
+    if [ -e "$old_dir" ]; then
+        error "临时旧数据目录已存在: $old_dir"
+    fi
+
+    if [ -d "$DATA_DIR" ]; then
+        mv "$DATA_DIR" "$old_dir" || error "移动旧数据目录失败。"
+    fi
+
+    if mv "$new_data" "$DATA_DIR"; then
+        rm -rf "$old_dir"
+        OLD_DATA_DIR=""
+    else
+        if [ -d "$old_dir" ]; then
+            mv "$old_dir" "$DATA_DIR" 2>/dev/null || true
+        fi
+        OLD_DATA_DIR=""
+        error "替换数据目录失败，已尝试恢复旧数据。"
+    fi
+}
+
+restart_komari_if_possible() {
+    if command -v supervisorctl >/dev/null 2>&1; then
+        supervisorctl restart komari >/dev/null 2>&1 && {
+            log "已重启 Komari 进程以加载还原数据"
+            return 0
+        }
+    fi
+    log "未能自动重启 Komari；如果面板未立即生效，请重启容器。"
+}
+
 do_restore() {
     local backup_file="$1"
-    
+    local expected_sha256="${2:-}"
+    local expected_size="${3:-}"
+    local actual_sha256
+
     info "开始还原备份: $backup_file"
     log "开始还原备份: $backup_file"
-    
-    # 获取下载链接
-    download_url=$(get_download_url "$backup_file")
-    
-    if [ -z "$download_url" ]; then
-        error "无法获取备份文件的下载链接: $backup_file"
-    fi
-    
+
+    valid_backup_filename "$backup_file" || error "备份文件名非法: $backup_file"
+
+    DOWNLOAD_PATH=$(mktemp /tmp/komari_restore.XXXXXX.tar.gz) || error "无法创建下载临时文件。"
+    EXTRACT_DIR=$(mktemp -d /tmp/komari_restore_extract.XXXXXX) || error "无法创建解压临时目录。"
+
     hint "正在下载备份文件..."
-    download_path="/tmp/komari_restore.tar.gz"
-    
-    if ! wget -q -O "$download_path" "$download_url" 2>/dev/null; then
-        error "下载备份文件失败"
+    download_backup_file "$backup_file" "$DOWNLOAD_PATH"
+
+    hint "正在校验备份文件..."
+    if ! actual_sha256=$(verify_download "$DOWNLOAD_PATH" "$expected_sha256" "$expected_size"); then
+        error "备份文件校验失败，拒绝还原。"
     fi
-    
-    cd "$WORK_DIR" || error "无法进入工作目录: $WORK_DIR"
-    
-    hint "正在清理旧数据..."
-    if [ -d "$DATA_DIR" ]; then
-        rm -rf "$DATA_DIR"
-    fi
-    
+
     hint "正在解压备份文件..."
-    if ! tar xzf "$download_path" -C "$WORK_DIR/" 2>/dev/null; then
-        rm -f "$download_path"
-        error "解压备份文件失败"
-    fi
-    
-    rm -f "$download_path"
-    
-    # 记录本次还原
-    save_restore_file "$backup_file"
-    
+    tar xzf "$DOWNLOAD_PATH" -C "$EXTRACT_DIR" || error "解压备份文件失败。"
+
+    hint "正在替换数据目录..."
+    replace_data_dir "$EXTRACT_DIR/data"
+
+    save_restore_state "$backup_file" "$actual_sha256"
+    restart_komari_if_possible
+
     info "备份文件已成功还原: $backup_file"
-    log "备份文件已成功还原: $backup_file"
+    log "备份文件已成功还原: $backup_file sha256=$actual_sha256"
 }
 
-# 自动还原模式（每分钟检测）
 auto_restore() {
+    local latest_state latest_file latest_sha256 latest_size last_state last_file last_sha256 is_new_backup
+
     check_env
-    
-    # 获取最新备份文件名
-    latest_file=$(get_latest_backup_filename)
-    
-    if [ -z "$latest_file" ]; then
+    acquire_lock
+
+    if ! latest_state=$(read_latest_metadata); then
+        error "无法读取可信的最新备份索引，拒绝还原。"
+    fi
+    if [ -z "$latest_state" ]; then
         log "未找到任何备份文件"
         exit 0
     fi
-    
-    # 获取本地记录的最后还原文件
-    last_file=$(get_last_restore_file)
-    
-    # 比对：如果不同则还原
-    if [ "$latest_file" != "$last_file" ]; then
-        info "检测到新的备份文件: $latest_file (上次: $last_file)"
-        log "检测到新的备份文件: $latest_file"
-        do_restore "$latest_file"
+
+    latest_file=$(printf "%s" "$latest_state" | awk '{print $1}')
+    latest_sha256=$(printf "%s" "$latest_state" | awk '{print $2}')
+    latest_size=$(printf "%s" "$latest_state" | awk '{print $3}')
+
+    last_state=$(get_last_restore_state)
+    last_file=$(printf "%s" "$last_state" | awk '{print $1}')
+    last_sha256=$(printf "%s" "$last_state" | awk '{print $2}')
+
+    if valid_sha256 "$latest_sha256"; then
+        is_new_backup=false
+        if [ "$latest_file" != "$last_file" ] || [ "$latest_sha256" != "$last_sha256" ]; then
+            is_new_backup=true
+        fi
     else
-        log "本地与远程备份文件一致，无需还原"
+        is_new_backup=false
+        if [ "$latest_file" != "$last_file" ]; then
+            is_new_backup=true
+        fi
+        latest_sha256=""
+    fi
+
+    if [ "$is_new_backup" = "true" ]; then
+        info "检测到新的备份文件: $latest_file"
+        log "检测到新的备份文件: $latest_file sha256=$latest_sha256"
+        do_restore "$latest_file" "$latest_sha256" "$latest_size"
+    else
+        log "本地与远程备份状态一致，无需还原"
     fi
 }
 
-# 手动还原模式（指定文件名）
 manual_restore() {
     local backup_file="$1"
-    
+    local file_state file_size
+
     if [ -z "$backup_file" ]; then
         error "请指定备份文件名: $0 {filename}"
     fi
-    
+
     check_env
-    do_restore "$backup_file"
+    acquire_lock
+
+    file_state=$(get_file_metadata "$backup_file") || error "无法获取备份文件信息: $backup_file"
+    file_size=$(printf "%s" "$file_state" | awk '{print $3}')
+    do_restore "$backup_file" "" "$file_size"
 }
 
-# 强制还原模式（忽略本地记录）
 force_restore() {
+    local latest_state latest_file latest_sha256 latest_size
+
     check_env
-    
-    latest_file=$(get_latest_backup_filename)
-    
-    if [ -z "$latest_file" ]; then
+    acquire_lock
+
+    if ! latest_state=$(read_latest_metadata); then
+        error "无法读取可信的最新备份索引，拒绝还原。"
+    fi
+    if [ -z "$latest_state" ]; then
         error "未找到任何备份文件"
     fi
-    
+
+    latest_file=$(printf "%s" "$latest_state" | awk '{print $1}')
+    latest_sha256=$(printf "%s" "$latest_state" | awk '{print $2}')
+    latest_size=$(printf "%s" "$latest_state" | awk '{print $3}')
+
     info "执行强制还原: $latest_file"
-    log "执行强制还原: $latest_file"
-    do_restore "$latest_file"
+    log "执行强制还原: $latest_file sha256=$latest_sha256"
+    do_restore "$latest_file" "$latest_sha256" "$latest_size"
 }
 
-# --- 主逻辑 ---
 case "${1:-}" in
     a)
-        # 自动模式（Supervisor/Cron 每分钟调用）
+        require_command curl
+        require_command tar
+        require_command sha256sum
         auto_restore
         ;;
     f)
-        # 强制还原模式
+        require_command curl
+        require_command tar
+        require_command sha256sum
         force_restore
         ;;
     "")
-        # 无参数则显示帮助
         echo "使用方法:"
         echo "  $0 a              - 自动还原模式（Supervisor/Cron 每分钟调用）"
         echo "  $0 f              - 强制还原最新备份"
@@ -221,7 +469,9 @@ case "${1:-}" in
         exit 1
         ;;
     *)
-        # 手动指定文件名
+        require_command curl
+        require_command tar
+        require_command sha256sum
         manual_restore "$1"
         ;;
 esac
