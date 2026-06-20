@@ -1,36 +1,39 @@
 # komari
 ## 当前镜像版本 v1.2.3
 
+## Fork 后需要改哪些
+
+- GitHub Actions 会自动把镜像发布到当前仓库对应的 GHCR 地址：`ghcr.io/<owner>/<repo>:latest`，fork 后不用改 workflow 里的用户名或仓库名。
+- Docker Compose 只需要复制 `.env.example` 为 `.env`，集中修改镜像、备份仓库、隧道域名和密码等配置。
+- 自动更新脚本默认从构建镜像时的仓库和分支拉取脚本；本地自建或特殊分支可用 `KOMARI_SOURCE_REPOSITORY`、`KOMARI_SOURCE_BRANCH` 覆盖。
+
 ## 快速开始
 
 ```bash
+IMAGE="ghcr.io/your_github_username/komari:latest"
+GH_BACKUP_USER="your_github_username"
+GH_REPO="your_private_repo_name"
+GH_PAT="your_github_personal_access_token"
+GH_EMAIL="your_github_email@example.com"
+ADMIN_USERNAME="yourusername"
+ADMIN_PASSWORD="yourpassword"
+ARGO_DOMAIN="your-argo-domain.com"
+KOMARI_CLOUDFLARED_TOKEN="eyJxxxxx"
+
 docker run -d \
   --name komari \
   --restart unless-stopped \
   -p 25774:25774 \
   -v ./komari-data:/app/data \
-  # 【必需】GitHub 备份配置
-  -e GH_BACKUP_USER="your_github_username" \
-  -e GH_REPO="your_private_repo_name" \
-  -e GH_PAT="your_github_personal_access_token" \
-  -e GH_EMAIL="your_github_email@example.com" \
-  # 【必需】面板登录
-  -e ADMIN_USERNAME="yourusername" \
-  -e ADMIN_PASSWORD="yourpassword" \
-  # 【必需】Cloudflare 隧道
-  -e ARGO_DOMAIN="your-argo-domain.com" \
-  -e KOMARI_CLOUDFLARED_TOKEN="eyJxxxxx" \
-  # 【可选】备份配置
-  # -e BACKUP_TIME="0 20 * * *" \
-  # -e BACKUP_DAYS="10" \
-  # 【可选】Caddy 反代配置
-  # -e CADDY_PROXY_PORT="8001" \
-  # -e CADDY_VERSION="2.9.1" \
-  # 【可选】节点订阅（VLESS/VMESS）
-  # -e UUID="your-uuid-here" \
-  # -e CF_IP="your-cf-ip" \
-  # -e SUB_NAME="komari" \
-  ghcr.io/hynize/komari:latest
+  -e GH_BACKUP_USER="$GH_BACKUP_USER" \
+  -e GH_REPO="$GH_REPO" \
+  -e GH_PAT="$GH_PAT" \
+  -e GH_EMAIL="$GH_EMAIL" \
+  -e ADMIN_USERNAME="$ADMIN_USERNAME" \
+  -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+  -e ARGO_DOMAIN="$ARGO_DOMAIN" \
+  -e KOMARI_CLOUDFLARED_TOKEN="$KOMARI_CLOUDFLARED_TOKEN" \
+  "$IMAGE"
 ```
 
 ## 必需的环境变量
@@ -71,6 +74,11 @@ docker run -d \
 - `CF_IP` - CDN 优选 IP，默认 `ip.sb`
 - `SUB_NAME` - 订阅名称，默认 `komari`
 
+### 脚本更新来源（可选）
+
+- `KOMARI_SOURCE_REPOSITORY` - 自动更新脚本来源仓库，默认由镜像构建时写入，例如 `your_github_username/komari`
+- `KOMARI_SOURCE_BRANCH` - 自动更新脚本来源分支，默认由镜像构建时写入，通常为 `main`
+
 ## 部署方案
 
 ### 推荐：使用 Cloudflare 隧道
@@ -80,33 +88,32 @@ docker run -d \
 **完整部署命令**：
 
 ```bash
+IMAGE="ghcr.io/your_github_username/komari:latest"
+GH_BACKUP_USER="your_github_username"
+GH_REPO="your_private_repo_name"
+GH_PAT="your_github_personal_access_token"
+GH_EMAIL="your_github_email@example.com"
+ADMIN_USERNAME="yourusername"
+ADMIN_PASSWORD="yourpassword"
+ARGO_DOMAIN="your-argo-domain.com"
+KOMARI_CLOUDFLARED_TOKEN="eyJxxxxx"
+UUID="your-uuid-here"
+
 docker run -d \
   --name komari \
   --restart unless-stopped \
   -p 25774:25774 \
   -v ./komari-data:/app/data \
-  # 【必需】GitHub 备份配置
-  -e GH_BACKUP_USER="your_github_username" \
-  -e GH_REPO="your_private_repo_name" \
-  -e GH_PAT="your_github_personal_access_token" \
-  -e GH_EMAIL="your_github_email@example.com" \
-  # 【必需】面板登录
-  -e ADMIN_USERNAME="yourusername" \
-  -e ADMIN_PASSWORD="yourpassword" \
-  # 【必需】Cloudflare 隧道和订阅
-  -e ARGO_DOMAIN="your-argo-domain.com" \
-  -e KOMARI_CLOUDFLARED_TOKEN="eyJxxxxx" \
-  -e UUID="your-uuid-here" \
-  # 【可选】订阅配置
-  # -e CF_IP="your-cf-ip" \
-  # -e SUB_NAME="komari" \
-  # 【可选】备份配置
-  # -e BACKUP_TIME="0 20 * * *" \
-  # -e BACKUP_DAYS="10" \
-  # 【可选】Caddy 反代端口
-  # -e CADDY_PROXY_PORT="8001" \
-  # -e CADDY_VERSION="2.9.1" \
-  ghcr.io/hynize/komari:latest
+  -e GH_BACKUP_USER="$GH_BACKUP_USER" \
+  -e GH_REPO="$GH_REPO" \
+  -e GH_PAT="$GH_PAT" \
+  -e GH_EMAIL="$GH_EMAIL" \
+  -e ADMIN_USERNAME="$ADMIN_USERNAME" \
+  -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+  -e ARGO_DOMAIN="$ARGO_DOMAIN" \
+  -e KOMARI_CLOUDFLARED_TOKEN="$KOMARI_CLOUDFLARED_TOKEN" \
+  -e UUID="$UUID" \
+  "$IMAGE"
 ```
 
 **架构说明**：
@@ -210,6 +217,8 @@ docker start komari
 ## 使用 Docker Compose
 
 ```bash
+cp .env.example .env
+# 编辑 .env 后启动
 docker compose up -d
 ```
 

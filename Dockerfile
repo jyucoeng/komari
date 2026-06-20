@@ -1,5 +1,10 @@
 FROM ghcr.io/komari-monitor/komari:latest
 
+ARG KOMARI_SOURCE_REPOSITORY="hynize/komari"
+ARG KOMARI_SOURCE_BRANCH="main"
+ENV KOMARI_SOURCE_REPOSITORY="$KOMARI_SOURCE_REPOSITORY" \
+    KOMARI_SOURCE_BRANCH="$KOMARI_SOURCE_BRANCH"
+
 RUN apk add --no-cache bash curl wget git sqlite jq tar dcron supervisor
 
 COPY entrypoint.sh /usr/local/bin/

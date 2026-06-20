@@ -16,8 +16,8 @@
 #---------------------------------------------------------------
 WORK_DIR="${WORK_DIR:-/app}"
 TEMP_DIR="/tmp/renew_scripts"
-GITHUB_REPO="${GITHUB_REPO:-jyucoeng/komari}"
-GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+SOURCE_REPOSITORY="${KOMARI_SOURCE_REPOSITORY:-${GITHUB_REPO:-hynize/komari}}"
+SOURCE_BRANCH="${KOMARI_SOURCE_BRANCH:-${GITHUB_BRANCH:-main}}"
 
 #---------------------------------------------------------------
 # 脚本核心逻辑
@@ -44,7 +44,7 @@ download_script() {
     local script_name="$1"
     local output_path="$TEMP_DIR/$script_name"
     
-    local url="https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_BRANCH/$script_name"
+    local url="https://raw.githubusercontent.com/$SOURCE_REPOSITORY/$SOURCE_BRANCH/$script_name"
     
     hint "正在下载 $script_name..."
     

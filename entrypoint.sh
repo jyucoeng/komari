@@ -58,6 +58,10 @@ echo "export GH_REPO=\"$GH_REPO\"" >> "$CRON_ENV_FILE"
 echo "export GH_PAT=\"$GH_PAT\"" >> "$CRON_ENV_FILE"
 echo "export GH_EMAIL=\"$GH_EMAIL\"" >> "$CRON_ENV_FILE"
 echo "export BACKUP_DAYS=\"$BACKUP_DAYS\"" >> "$CRON_ENV_FILE"
+echo "export KOMARI_SOURCE_REPOSITORY=\"$KOMARI_SOURCE_REPOSITORY\"" >> "$CRON_ENV_FILE"
+echo "export KOMARI_SOURCE_BRANCH=\"$KOMARI_SOURCE_BRANCH\"" >> "$CRON_ENV_FILE"
+echo "export GITHUB_REPO=\"$GITHUB_REPO\"" >> "$CRON_ENV_FILE"
+echo "export GITHUB_BRANCH=\"$GITHUB_BRANCH\"" >> "$CRON_ENV_FILE"
 chmod +x "$CRON_ENV_FILE"
 
 # 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
@@ -78,9 +82,12 @@ if [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ TunnelSecret ]]; then
     KOMARI_CLOUDFLARED_TOKEN_PROCESSED="$KOMARI_CLOUDFLARED_TOKEN"
     
     echo "$KOMARI_CLOUDFLARED_TOKEN_PROCESSED" > $WORK_DIR/argo.json
-    
-    # 从 JSON 中提取 Tunnel ID（第 12 个双引号之间的内容）
-    TUNNEL_ID=$(cut -d '"' -f12 <<< "$KOMARI_CLOUDFLARED_TOKEN_PROCESSED")
+
+    # 从 JSON 凭据中提取 Tunnel ID
+    TUNNEL_ID=$(jq -r '.TunnelID // .TunnelId // .tunnel_id // empty' "$WORK_DIR/argo.json" 2>/dev/null)
+    if [ -z "$TUNNEL_ID" ]; then
+        error "错误：无法从 KOMARI_CLOUDFLARED_TOKEN JSON 中提取 Tunnel ID"
+    fi
     
     # 生成 argo.yml 配置文件
     cat > $WORK_DIR/argo.yml << 'ARGO_EOF'
@@ -102,7 +109,7 @@ ARGO_EOF
     CLOUDFLARED_CMD="$CLOUDFLARED_BIN tunnel --edge-ip-version auto --config $WORK_DIR/argo.yml run"
     hint "Cloudflare 隧道配置完成（JSON 格式）"
     
-elif [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ ^ey[A-Z0-9a-z=]{120,250}$ ]]; then
+elif [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ ^ey[A-Za-z0-9_-]{80,}=*$ ]]; then
     # Token 格式处理
     CLOUDFLARED_CMD="$CLOUDFLARED_BIN tunnel --edge-ip-version auto --protocol http2 run --token ${KOMARI_CLOUDFLARED_TOKEN}"
     hint "Cloudflare 隧道配置完成（Token 格式）"
@@ -204,29 +211,37 @@ pidfile=/run/supervisord.pid
 command=/usr/sbin/crond -f
 autostart=true
 autorestart=true
-stderr_logfile=/dev/null
-stdout_logfile=/dev/null
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
 
 [program:komari]
 command=/bin/sh -c 'unset KOMARI_CLOUDFLARED_TOKEN KOMARI_CLOUDFLARED_BIN; exec /app/komari server -l 0.0.0.0:25774'
 autostart=true
 autorestart=true
-stderr_logfile=/dev/null
-stdout_logfile=/dev/null
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
 
 [program:caddy]
 command=/usr/local/bin/caddy run --config CADDYFILE_PLACEHOLDER --watch
 autostart=true
 autorestart=true
-stderr_logfile=/dev/null
-stdout_logfile=/dev/null
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
 
 [program:cloudflared]
 command=CLOUDFLARED_CMD_PLACEHOLDER
 autostart=true
 autorestart=true
-stderr_logfile=/dev/null
-stdout_logfile=/dev/null
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
 
 EOF
 

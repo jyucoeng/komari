@@ -2,50 +2,48 @@ version: "3.9"
 
 services:
   komari:
-    image: ghcr.io/hynize/komari:latest
+    image: "${KOMARI_IMAGE:-ghcr.io/hynize/komari:latest}"
     container_name: komari
     restart: unless-stopped
     ports:
       - "25774:25774"
     environment:
-      # ========== 【必需】以下变量必须填写 ==========
-      
       # GitHub 备份配置（备份和自动还原所需）
-      - GH_BACKUP_USER=your_github_username
-      - GH_REPO=your_private_repo_name
-      - GH_PAT=your_github_personal_access_token
-      - GH_EMAIL=your_github_email@example.com
-      
+      GH_BACKUP_USER: "${GH_BACKUP_USER:-your_github_username}"
+      GH_REPO: "${GH_REPO:-your_private_repo_name}"
+      GH_PAT: "${GH_PAT:-your_github_personal_access_token}"
+      GH_EMAIL: "${GH_EMAIL:-your_github_email@example.com}"
+
       # 面板登录凭证
-      - ADMIN_USERNAME=yourusername
-      - ADMIN_PASSWORD=yourpassword
-      
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-yourusername}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-yourpassword}"
+
       # Cloudflare 隧道配置（必需，支持 Token 和 JSON 格式）
-      - ARGO_DOMAIN=your-argo-domain.com
-      - KOMARI_CLOUDFLARED_TOKEN=eyJxxxxx
-      
-      # ========== 【可选】以下变量可根据需要调整 ==========
-      
+      ARGO_DOMAIN: "${ARGO_DOMAIN:-your-argo-domain.com}"
+      KOMARI_CLOUDFLARED_TOKEN: "${KOMARI_CLOUDFLARED_TOKEN:-eyJxxxxx}"
+
       # 备份时间配置
-      # - BACKUP_TIME=0 20 * * *  # Cron 表达式，默认 UTC 20:00
-      # - BACKUP_DAYS=10  # 保留备份天数，默认 10
-      
+      BACKUP_TIME: "${BACKUP_TIME:-0 20 * * *}"
+      BACKUP_DAYS: "${BACKUP_DAYS:-10}"
+
       # 脚本更新配置
-      # - NO_AUTO_RENEW=1  # 设置此项以禁用脚本自动更新
-      
+      NO_AUTO_RENEW: "${NO_AUTO_RENEW:-}"
+      KOMARI_SOURCE_REPOSITORY: "${KOMARI_SOURCE_REPOSITORY:-}"
+      KOMARI_SOURCE_BRANCH: "${KOMARI_SOURCE_BRANCH:-}"
+
       # Caddy 反代配置（可选，Caddy 用于反代 Komari 和提供订阅服务）
-      # - CADDY_PROXY_PORT=8001  # Caddy 监听端口，默认 8001
-      # - CADDY_VERSION=2.9.1  # Caddy 版本，默认 2.9.1
-      
+      CADDY_PROXY_PORT: "${CADDY_PROXY_PORT:-8001}"
+      CADDY_VERSION: "${CADDY_VERSION:-2.9.1}"
+
       # 节点订阅配置（只有设置 UUID 时才启用订阅功能）
-      # - UUID=your-uuid-here
-      # - CF_IP=your-cf-ip  # CDN 优选 IP，默认 ip.sb
-      # - SUB_NAME=komari  # 订阅名称，默认为 komari
-      
+      UUID: "${UUID:-}"
+      CF_IP: "${CF_IP:-}"
+      SUB_NAME: "${SUB_NAME:-komari}"
+
     volumes:
       - ./komari-data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:25774/health", "||", "exit", "1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:25774/ >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

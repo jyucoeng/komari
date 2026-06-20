@@ -16,6 +16,12 @@ jobs:
       - name: ⬇️ Checkout Repository
         uses: actions/checkout@v4
 
+      - name: 🧭 Set image metadata
+        run: |
+          echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "SOURCE_REPOSITORY=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
       - name: 🏷️ Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -35,6 +41,9 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ghcr.io/hynize/komari:latest
+          tags: ${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            KOMARI_SOURCE_REPOSITORY=${{ env.SOURCE_REPOSITORY }}
+            KOMARI_SOURCE_BRANCH=${{ env.SOURCE_BRANCH }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
