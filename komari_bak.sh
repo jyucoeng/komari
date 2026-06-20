@@ -56,7 +56,7 @@ cleanup() {
     [ -n "$BACKUP_STAGE_DIR" ] && [ -d "$BACKUP_STAGE_DIR" ] && rm -rf "$BACKUP_STAGE_DIR"
     [ -n "$BACKUP_TEMP_DIR" ] && [ -d "$BACKUP_TEMP_DIR" ] && rm -rf "$BACKUP_TEMP_DIR"
     if [ "$LOCK_ACQUIRED" = "1" ]; then
-        rmdir "$LOCK_DIR" 2>/dev/null || true
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
@@ -88,7 +88,10 @@ validate_config() {
         error "GH_BACKUP_BRANCH 不合法。"
     fi
     if ! echo "$BACKUP_DAYS" | grep -Eq '^[0-9]+$'; then
-        error "BACKUP_DAYS 必须是非负整数。"
+        error "BACKUP_DAYS 必须是正整数。"
+    fi
+    if [ "$BACKUP_DAYS" -lt 1 ]; then
+        error "BACKUP_DAYS 必须大于等于 1。"
     fi
     if ! echo "$LOCK_TIMEOUT_SECONDS" | grep -Eq '^[0-9]+$'; then
         error "KOMARI_LOCK_TIMEOUT_SECONDS 必须是非负整数。"
@@ -96,14 +99,18 @@ validate_config() {
 }
 
 lock_mtime() {
-    stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0
+    local mtime
+    mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || true)
+    if printf "%s" "$mtime" | grep -Eq '^[0-9]+$'; then
+        printf '%s\n' "$mtime"
+    fi
 }
 
 acquire_lock() {
     if [ -d "$LOCK_DIR" ]; then
         now=$(date +%s)
         mtime=$(lock_mtime)
-        if [ "$mtime" -gt 0 ] && [ $((now - mtime)) -gt "$LOCK_TIMEOUT_SECONDS" ]; then
+        if [ -n "$mtime" ] && [ "$mtime" -gt 0 ] && [ $((now - mtime)) -gt "$LOCK_TIMEOUT_SECONDS" ]; then
             hint "检测到过期任务锁，正在清理。"
             rm -rf "$LOCK_DIR"
         fi
@@ -193,11 +200,18 @@ create_data_snapshot() {
 
 cleanup_old_backups() {
     hint "正在清理旧备份，保留最近 $BACKUP_DAYS 天的数据..."
-    CUTOFF_DATE=$(date -u -d "$BACKUP_DAYS days ago" "+%Y-%m-%d" 2>/dev/null || date -u -v-${BACKUP_DAYS}d "+%Y-%m-%d")
+    local cutoff_seconds cutoff_stamp file file_stamp
+
+    cutoff_seconds=$(($(date -u +%s) - BACKUP_DAYS * 86400))
+    cutoff_stamp=$(date -u -d "@$cutoff_seconds" "+%Y-%m-%d-%H%M%S" 2>/dev/null || date -u -r "$cutoff_seconds" "+%Y-%m-%d-%H%M%S" 2>/dev/null || true)
+    if [ -z "$cutoff_stamp" ]; then
+        hint "无法计算旧备份清理时间，本次跳过清理。"
+        return 0
+    fi
 
     find . -maxdepth 1 -name 'komari-*.tar.gz' -type f -print | while IFS= read -r file; do
-        FILE_DATE=$(printf "%s" "$file" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)
-        if [ -n "$FILE_DATE" ] && [ "$FILE_DATE" \< "$CUTOFF_DATE" ]; then
+        file_stamp=$(basename "$file" | sed -n 's/^komari-\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}-[0-9]\{6\}\)\.tar\.gz$/\1/p')
+        if [ -n "$file_stamp" ] && [ "$file_stamp" \< "$cutoff_stamp" ]; then
             rm -f "$file"
         fi
     done

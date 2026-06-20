@@ -57,7 +57,7 @@ cleanup() {
         rm -rf "$OLD_DATA_DIR"
     fi
     if [ "$LOCK_ACQUIRED" = "1" ]; then
-        rmdir "$LOCK_DIR" 2>/dev/null || true
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
@@ -76,7 +76,7 @@ require_command() {
 check_env() {
     if [ -z "$GH_BACKUP_USER" ] || [ -z "$GH_REPO" ] || [ -z "$GH_PAT" ]; then
         log "错误：备份相关环境变量未全部设置 (GH_BACKUP_USER, GH_REPO, GH_PAT)"
-        exit 0
+        error "备份相关环境变量未全部设置 (GH_BACKUP_USER, GH_REPO, GH_PAT)。"
     fi
     if ! printf "%s" "$GH_BACKUP_USER" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
         error "GH_BACKUP_USER 只能包含字母、数字、下划线、点和短横线。"
@@ -91,14 +91,18 @@ check_env() {
 }
 
 lock_mtime() {
-    stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0
+    local mtime
+    mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || true)
+    if printf "%s" "$mtime" | grep -Eq '^[0-9]+$'; then
+        printf '%s\n' "$mtime"
+    fi
 }
 
 acquire_lock() {
     if [ -d "$LOCK_DIR" ]; then
         now=$(date +%s)
         mtime=$(lock_mtime)
-        if [ "$mtime" -gt 0 ] && [ $((now - mtime)) -gt "$LOCK_TIMEOUT_SECONDS" ]; then
+        if [ -n "$mtime" ] && [ "$mtime" -gt 0 ] && [ $((now - mtime)) -gt "$LOCK_TIMEOUT_SECONDS" ]; then
             log "检测到过期任务锁，正在清理"
             rm -rf "$LOCK_DIR"
         fi
@@ -187,7 +191,11 @@ read_latest_metadata() {
 get_latest_backup_from_listing() {
     local contents filename file_meta sha256 size
     contents=$(api_get "$(contents_url '')" 2>/dev/null || true)
-    filename=$(printf "%s" "$contents" | grep -oE 'komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz' | sort -r | head -n 1)
+    if command -v jq >/dev/null 2>&1; then
+        filename=$(printf "%s" "$contents" | jq -r '.[].name // empty' 2>/dev/null | grep -E '^komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz$' | sort -r | head -n 1)
+    else
+        filename=$(printf "%s" "$contents" | grep -oE 'komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz' | sort -r | head -n 1)
+    fi
     if [ -z "$filename" ]; then
         printf '\n'
         return 0
@@ -270,6 +278,8 @@ verify_download() {
     actual_sha256=$(sha256sum "$archive" | awk '{print $1}')
     if valid_sha256 "$expected_sha256" && [ "$actual_sha256" != "$expected_sha256" ]; then
         error "备份文件 sha256 不匹配，拒绝还原。"
+    elif ! valid_sha256 "$expected_sha256"; then
+        log "未提供可信 sha256 期望值，仅记录实际 sha256=$actual_sha256"
     fi
 
     if ! tar -tzf "$archive" >/dev/null 2>&1; then
@@ -289,28 +299,27 @@ download_backup_file() {
 
 replace_data_dir() {
     local new_data="$1"
-    local old_dir
+    local data_parent old_dir
 
     [ -d "$new_data" ] || error "备份包中没有 data 目录，拒绝还原。"
     cd "$WORK_DIR" || error "无法进入工作目录: $WORK_DIR"
 
-    old_dir="${DATA_DIR}.old.$$"
-    OLD_DATA_DIR="$old_dir"
-
-    if [ -e "$old_dir" ]; then
-        error "临时旧数据目录已存在: $old_dir"
-    fi
+    data_parent=$(dirname "$DATA_DIR")
+    mkdir -p "$data_parent" || error "无法创建数据目录父目录: $data_parent"
+    old_dir=$(mktemp -d "$data_parent/.komari-data-old.XXXXXX") || error "无法创建旧数据临时目录。"
+    rmdir "$old_dir" || error "无法初始化旧数据临时目录。"
 
     if [ -d "$DATA_DIR" ]; then
         mv "$DATA_DIR" "$old_dir" || error "移动旧数据目录失败。"
+        OLD_DATA_DIR="$old_dir"
     fi
 
     if mv "$new_data" "$DATA_DIR"; then
-        rm -rf "$old_dir"
+        [ -n "$OLD_DATA_DIR" ] && rm -rf "$OLD_DATA_DIR"
         OLD_DATA_DIR=""
     else
-        if [ -d "$old_dir" ]; then
-            mv "$old_dir" "$DATA_DIR" 2>/dev/null || true
+        if [ -n "$OLD_DATA_DIR" ] && [ -d "$OLD_DATA_DIR" ]; then
+            mv "$OLD_DATA_DIR" "$DATA_DIR" 2>/dev/null || true
         fi
         OLD_DATA_DIR=""
         error "替换数据目录失败，已尝试恢复旧数据。"
@@ -408,7 +417,7 @@ auto_restore() {
 
 manual_restore() {
     local backup_file="$1"
-    local file_state file_size
+    local file_state file_size latest_state latest_file latest_sha256 latest_size expected_sha256 expected_size
 
     if [ -z "$backup_file" ]; then
         error "请指定备份文件名: $0 {filename}"
@@ -419,7 +428,18 @@ manual_restore() {
 
     file_state=$(get_file_metadata "$backup_file") || error "无法获取备份文件信息: $backup_file"
     file_size=$(printf "%s" "$file_state" | awk '{print $3}')
-    do_restore "$backup_file" "" "$file_size"
+    expected_sha256=""
+    expected_size="$file_size"
+    if latest_state=$(read_latest_metadata 2>/dev/null); then
+        latest_file=$(printf "%s" "$latest_state" | awk '{print $1}')
+        latest_sha256=$(printf "%s" "$latest_state" | awk '{print $2}')
+        latest_size=$(printf "%s" "$latest_state" | awk '{print $3}')
+        if [ "$backup_file" = "$latest_file" ] && valid_sha256 "$latest_sha256"; then
+            expected_sha256="$latest_sha256"
+            valid_size "$latest_size" && expected_size="$latest_size"
+        fi
+    fi
+    do_restore "$backup_file" "$expected_sha256" "$expected_size"
 }
 
 force_restore() {

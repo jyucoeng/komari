@@ -5,7 +5,7 @@
 
 - GitHub Actions 会自动把镜像发布到当前仓库对应的 GHCR 地址：`ghcr.io/<owner>/<repo>:latest`，fork 后不用改 workflow 里的用户名或仓库名。
 - Docker Compose 只需要复制 `.env.example` 为 `.env`，集中修改镜像、备份仓库、隧道域名和密码等配置。
-- 自动更新脚本默认从构建镜像时的仓库和分支拉取脚本；本地自建或特殊分支可用 `KOMARI_SOURCE_REPOSITORY`、`KOMARI_SOURCE_BRANCH` 覆盖。
+- 自动更新脚本默认从镜像构建时写入的仓库和分支拉取脚本，fork 后不需要改脚本里的仓库名；本地自建或特殊分支可在 `docker run` 时用 `KOMARI_SOURCE_REPOSITORY`、`KOMARI_SOURCE_BRANCH` 覆盖。
 
 ## 快速开始
 
@@ -73,12 +73,12 @@ docker run -d \
 ### 节点订阅（可选）
 
 - `UUID` - 节点订阅 UUID（未设置则跳过订阅功能）
-- `CF_IP` - CDN 优选 IP，默认 `ip.sb`
+- `CF_IP` - CDN 优选 IP 或域名，未设置时使用 `ARGO_DOMAIN`
 - `SUB_NAME` - 订阅名称，默认 `komari`
 
 ### 脚本更新来源（可选）
 
-- `KOMARI_SOURCE_REPOSITORY` - 自动更新脚本来源仓库，默认由镜像构建时写入，例如 `your_github_username/komari`
+- `KOMARI_SOURCE_REPOSITORY` - 自动更新脚本来源仓库，默认由镜像构建时写入，例如 `your_github_username/komari`。使用 Docker Compose 时建议保持未设置，让镜像内置值生效。
 - `KOMARI_SOURCE_BRANCH` - 自动更新脚本来源分支，默认由镜像构建时写入，通常为 `main`
 
 ## 部署方案
@@ -197,7 +197,8 @@ docker start komari
 
 ### 脚本自动更新
 
-如果启用了自动更新功能（默认启用），容器会在每天 UTC 时间 03:30 自动从 Github 获取最新的备份和还原脚本，无需重新构建镜像。
+如果启用了自动更新功能（默认启用），容器会在每天 UTC 时间 03:30 自动从 Github 获取最新的备份、还原和订阅脚本，无需重新构建镜像。
+当前自动更新范围包括 `komari_bak.sh`、`restore.sh` 和 `sub_link.sh`。
 
 **禁用自动更新**：
 ```bash

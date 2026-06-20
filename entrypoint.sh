@@ -46,8 +46,8 @@ BACKUP_DAYS=${BACKUP_DAYS:-"10"}
 CADDY_PROXY_PORT=${CADDY_PROXY_PORT:-'8001'}
 
 # Caddy 版本配置
-if [[ "$CADDY_VERSION" =~ [0-9]{1}\.[0-9]{1,2}\.[0-9]{1,2}$ ]]; then
-    CADDY_LATEST=$(sed 's/[A-Za-z]//' <<< "$CADDY_VERSION")
+if [[ "$CADDY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    CADDY_LATEST="$CADDY_VERSION"
 else
     CADDY_LATEST=2.9.1
 fi
@@ -60,11 +60,15 @@ echo "export GH_PAT=\"$GH_PAT\"" >> "$CRON_ENV_FILE"
 echo "export GH_EMAIL=\"$GH_EMAIL\"" >> "$CRON_ENV_FILE"
 echo "export BACKUP_DAYS=\"$BACKUP_DAYS\"" >> "$CRON_ENV_FILE"
 echo "export KOMARI_LOCK_TIMEOUT_SECONDS=\"$KOMARI_LOCK_TIMEOUT_SECONDS\"" >> "$CRON_ENV_FILE"
+echo "export TZ=\"$TZ\"" >> "$CRON_ENV_FILE"
 echo "export KOMARI_SOURCE_REPOSITORY=\"$KOMARI_SOURCE_REPOSITORY\"" >> "$CRON_ENV_FILE"
 echo "export KOMARI_SOURCE_BRANCH=\"$KOMARI_SOURCE_BRANCH\"" >> "$CRON_ENV_FILE"
-echo "export GITHUB_REPO=\"$GITHUB_REPO\"" >> "$CRON_ENV_FILE"
-echo "export GITHUB_BRANCH=\"$GITHUB_BRANCH\"" >> "$CRON_ENV_FILE"
-chmod +x "$CRON_ENV_FILE"
+echo "export UUID=\"$UUID\"" >> "$CRON_ENV_FILE"
+echo "export ARGO_DOMAIN=\"$ARGO_DOMAIN\"" >> "$CRON_ENV_FILE"
+echo "export CF_IP=\"$CF_IP\"" >> "$CRON_ENV_FILE"
+echo "export SUB_NAME=\"$SUB_NAME\"" >> "$CRON_ENV_FILE"
+echo "export CADDY_PROXY_PORT=\"$CADDY_PROXY_PORT\"" >> "$CRON_ENV_FILE"
+chmod 600 "$CRON_ENV_FILE"
 
 # 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
 echo "$BACKUP_TIME . $CRON_ENV_FILE && $BACKUP_SCRIPT bak" > "$CRONTAB_FILE"
@@ -174,9 +178,9 @@ if [ -n "$UUID" ]; then
 EOF
     hint "检测到 UUID，配置订阅链接..."
     # 导出环境变量供 sub_link.sh 使用
-    export UUID CADDY_PROXY_PORT ARGO_DOMAIN
+    export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP SUB_NAME
     info "正在生成 VLESS 和 VMESS 订阅链接..."
-    bash "$SUB_LINK_SCRIPT"
+    bash "$SUB_LINK_SCRIPT" || error "订阅链接生成失败，请检查 UUID、ARGO_DOMAIN 或 CF_IP 配置"
 fi
 
 # 添加默认反代到 Komari 面板
@@ -219,7 +223,7 @@ stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 
 [program:komari]
-command=/bin/sh -c 'unset KOMARI_CLOUDFLARED_TOKEN KOMARI_CLOUDFLARED_BIN; exec /app/komari server -l 0.0.0.0:25774'
+command=/bin/sh -c 'unset KOMARI_CLOUDFLARED_TOKEN KOMARI_CLOUDFLARED_BIN GH_PAT; exec /app/komari server -l 0.0.0.0:25774'
 autostart=true
 autorestart=true
 stderr_logfile=/dev/stderr

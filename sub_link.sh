@@ -11,7 +11,7 @@
 #   - 生成完整的订阅链接并保存到文件
 #
 # 工作流程：
-#   1. 客户端 → CF_IP:443（Cloudflare CDN 优选 IP）
+#   1. 客户端 → CF_IP/ARGO_DOMAIN:443
 #   2. Cloudflare 隧道识别 SNI 和 Host 为 ARGO_DOMAIN
 #   3. 隧道将流量转发到容器内 Caddy:8001
 #   4. Caddy 反代到 Komari 面板 或 订阅文件
@@ -19,118 +19,101 @@
 # 环境变量说明：
 #   - ARGO_DOMAIN: Cloudflare 隧道配置的域名（必需）
 #   - UUID: 订阅 UUID（必需）
-#   - CF_IP: Cloudflare 等 CDN 的优选 IP，默认 ip.sb
+#   - CF_IP: Cloudflare 等 CDN 的优选 IP 或域名，未设置时使用 ARGO_DOMAIN
 #   - CADDY_PROXY_PORT: Caddy 反向代理的内部端口（用于内部通信）
 #===============================================================
 
-# 颜色定义
-info() { echo -e "\033[32m\033[01m$*\033[0m"; }     # 绿色
-error() { echo -e "\033[31m\033[01m$*\033[0m" && exit 1; } # 红色
-hint() { echo -e "\033[33m\033[01m$*\033[0m"; }     # 黄色
+info() { echo -e "\033[32m\033[01m$*\033[0m"; }
+error() { echo -e "\033[31m\033[01m$*\033[0m"; exit 1; }
+hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 
-# 获取国家代码
+fetch_url() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --connect-timeout "${HTTP_CONNECT_TIMEOUT:-5}" --max-time "${HTTP_MAX_TIME:-10}" "$url" 2>/dev/null || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- -T "${HTTP_MAX_TIME:-10}" "$url" 2>/dev/null || true
+    fi
+}
+
 get_country_code() {
-    local country_code="UN"
-    local urls=("http://ipinfo.io/country" "https://ifconfig.co/country" "https://ipapi.co/country")
-    
-    for url in "${urls[@]}"; do
-        if command -v curl &> /dev/null; then
-            country_code=$(curl -s "$url" 2>/dev/null)
-        else
-            country_code=$(wget -qO- "$url" 2>/dev/null)
-        fi
-        
-        if [ -n "$country_code" ] && [ ${#country_code} -eq 2 ]; then
+    local country_code response url
+    country_code="UN"
+    for url in "http://ipinfo.io/country" "https://ifconfig.co/country" "https://ipapi.co/country"; do
+        response=$(fetch_url "$url" | tr -d '\r\n[:space:]' | tr '[:lower:]' '[:upper:]')
+        if printf "%s" "$response" | grep -Eq '^[A-Z]{2}$'; then
+            country_code="$response"
             break
         fi
     done
-    
     echo "$country_code"
 }
 
-# 获取服务器公网 IP
-get_public_ip() {
-    local ip=""
-    local urls=("https://api.ipify.org" "https://ifconfig.co/ip" "https://ipapi.co/ip")
-    
-    for url in "${urls[@]}"; do
-        if command -v curl &> /dev/null; then
-            ip=$(curl -s "$url" 2>/dev/null)
-        else
-            ip=$(wget -qO- "$url" 2>/dev/null)
-        fi
-        
-        if [ -n "$ip" ]; then
-            break
-        fi
-    done
-    
-    echo "$ip"
+valid_uuid() {
+    printf "%s" "$1" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 }
 
-# 主配置
+valid_endpoint() {
+    printf "%s" "$1" | grep -Eq '^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]|[0-9A-Fa-f:.]+)$'
+}
+
 UUID="${UUID:-}"
 ARGO_DOMAIN="${ARGO_DOMAIN:-}"
-CF_IP="${CF_IP:-ip.sb}"
+CF_IP="${CF_IP:-}"
 SUB_NAME="${SUB_NAME:-komari}"
 OUTPUT_FILE="${OUTPUT_FILE:-/tmp/list.log}"
-# 注意：CADDY_PROXY_PORT 是容器内部端口，用于内部通信
-# 从客户端视角，通过 ARGO_DOMAIN 访问时，隧道对外的端口是 443（HTTPS）
 CADDY_PROXY_PORT="${CADDY_PROXY_PORT:-8001}"
 
-# 检查必要的环境变量（UUID 是必需的）
 if [ -z "$UUID" ]; then
     hint "UUID 未设置，跳过生成订阅链接"
     exit 0
 fi
+if ! valid_uuid "$UUID"; then
+    error "UUID 格式不正确，无法生成订阅链接"
+fi
 
-# ARGO_DOMAIN 在通过隧道时是必需的
 if [ -z "$ARGO_DOMAIN" ]; then
     hint "ARGO_DOMAIN 未设置，跳过生成订阅链接"
     exit 0
 fi
+if ! valid_endpoint "$ARGO_DOMAIN"; then
+    error "ARGO_DOMAIN 格式不正确，无法生成订阅链接"
+fi
 
-# 获取国家代码
+if [ -z "$CF_IP" ]; then
+    CF_IP="$ARGO_DOMAIN"
+    hint "CF_IP 未设置，订阅节点地址将使用 ARGO_DOMAIN"
+fi
+if ! valid_endpoint "$CF_IP"; then
+    error "CF_IP 格式不正确，无法生成订阅链接"
+fi
+
 COUNTRY_CODE=$(get_country_code)
 info "检测到国家代码: $COUNTRY_CODE"
 
-# 协议类型定义
 XIEYI='vl'
 XIEYI2='vm'
 
-# 生成 VLESS 链接
-# 说明：
-#   - 连接到 CF_IP:443 是因为 Cloudflare 隧道对外暴露的是 HTTPS (443 端口)
-#   - SNI 和 host 都设置为 ARGO_DOMAIN，用于隧道识别和 TLS 握手
 VLESS_URL="vless://${UUID}@${CF_IP}:443?path=%2F${XIEYI}s%3Fed%3D2048&security=tls&encryption=none&host=${ARGO_DOMAIN}&type=ws&sni=${ARGO_DOMAIN}#${COUNTRY_CODE}-${SUB_NAME}-${XIEYI}"
 
-# 生成 VMESS JSON
-# 说明：
-#   - add: CF_IP（CDN 优选 IP），这是客户端实际连接的地址
-#   - port: 443（Cloudflare 隧道对外的 HTTPS 端口）
-#   - host/sni: ARGO_DOMAIN（用于隧道识别和 TLS 握手）
-VMESS_JSON="{ \"v\": \"2\", \"ps\": \"${COUNTRY_CODE}-${SUB_NAME}-${XIEYI2}\", \"add\": \"${CF_IP}\", \"port\": \"443\", \"id\": \"${UUID}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"none\", \"host\": \"${ARGO_DOMAIN}\", \"path\": \"/vms?ed=2048\", \"tls\": \"tls\", \"sni\": \"${ARGO_DOMAIN}\", \"alpn\": \"\", \"fp\": \"randomized\", \"allowlnsecure\": \"false\"}"
+VMESS_JSON="{ \"v\": \"2\", \"ps\": \"${COUNTRY_CODE}-${SUB_NAME}-${XIEYI2}\", \"add\": \"${CF_IP}\", \"port\": \"443\", \"id\": \"${UUID}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"none\", \"host\": \"${ARGO_DOMAIN}\", \"path\": \"/vms?ed=2048\", \"tls\": \"tls\", \"sni\": \"${ARGO_DOMAIN}\", \"alpn\": \"\", \"fp\": \"randomized\", \"allowInsecure\": \"false\"}"
 
-# 将 VMESS JSON 转换为 Base64（跨平台兼容性处理）
-if ! command -v base64 &>/dev/null; then
+if ! command -v base64 >/dev/null 2>&1; then
     error "base64 命令不可用，无法生成订阅链接"
 fi
 
-# 检查 base64 是否支持 -w 选项（GNU 版本支持，BusyBox 不支持）
 if base64 -w 0 </dev/null >/dev/null 2>&1; then
-    # GNU base64（Linux）- 支持 -w 0 选项
-    VMESS_URL="vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
+    VMESS_URL="vmess://$(printf "%s" "$VMESS_JSON" | base64 -w 0)"
     FULL_URL="${VLESS_URL}\n${VMESS_URL}"
-    ENCODED_URL=$(echo -e "$FULL_URL" | base64 -w 0)
+    ENCODED_URL=$(printf "%b" "$FULL_URL" | base64 -w 0)
 else
-    # BusyBox base64（Alpine）- 不支持 -w 选项，使用 tr 删除换行
-    VMESS_URL="vmess://$(echo -n "$VMESS_JSON" | base64 | tr -d '\n')"
+    VMESS_URL="vmess://$(printf "%s" "$VMESS_JSON" | base64 | tr -d '\n')"
     FULL_URL="${VLESS_URL}\n${VMESS_URL}"
-    ENCODED_URL=$(echo -e "$FULL_URL" | base64 | tr -d '\n')
+    ENCODED_URL=$(printf "%b" "$FULL_URL" | base64 | tr -d '\n')
 fi
 
-# 输出到文件
-echo -n "$ENCODED_URL" > "$OUTPUT_FILE"
+mkdir -p "$(dirname "$OUTPUT_FILE")" 2>/dev/null || true
+printf "%s" "$ENCODED_URL" > "$OUTPUT_FILE"
 
 info "订阅链接已生成！"
 info "VLESS: $VLESS_URL"

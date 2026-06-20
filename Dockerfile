@@ -5,7 +5,7 @@ ARG KOMARI_SOURCE_BRANCH="main"
 ENV KOMARI_SOURCE_REPOSITORY="$KOMARI_SOURCE_REPOSITORY" \
     KOMARI_SOURCE_BRANCH="$KOMARI_SOURCE_BRANCH"
 
-RUN apk add --no-cache bash curl wget git sqlite jq tar dcron supervisor
+RUN apk add --no-cache bash curl wget git sqlite jq tar dcron supervisor coreutils
 
 COPY entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -23,5 +23,3 @@ COPY sub_link.sh /app/sub_link.sh
 RUN chmod +x /app/sub_link.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-
-CMD ["/app/komari", "server"]

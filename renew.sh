@@ -3,10 +3,10 @@
 #===============================================================
 #        Komari Dashboard Auto-Renew Scripts
 #
-# 此脚本用于自动更新 komari_bak.sh 和 restore.sh
+# 此脚本用于自动更新 komari_bak.sh、restore.sh 和 sub_link.sh
 # ---------------------------------------------------------------
 # 功能:
-#   - 每天定时从 GitHub 获取最新的备份和还原脚本
+#   - 每天定时从 GitHub 获取最新的备份、还原和订阅脚本
 #   - 比对哈希值，如果有变化则自动替换
 #   - 无需重新构建镜像即可获得最新的脚本
 #===============================================================
@@ -16,8 +16,8 @@
 #---------------------------------------------------------------
 WORK_DIR="${WORK_DIR:-/app}"
 TEMP_DIR="/tmp/renew_scripts"
-SOURCE_REPOSITORY="${KOMARI_SOURCE_REPOSITORY:-${GITHUB_REPO:-hynize/komari}}"
-SOURCE_BRANCH="${KOMARI_SOURCE_BRANCH:-${GITHUB_BRANCH:-main}}"
+SOURCE_REPOSITORY="${KOMARI_SOURCE_REPOSITORY:-hynize/komari}"
+SOURCE_BRANCH="${KOMARI_SOURCE_BRANCH:-main}"
 
 #---------------------------------------------------------------
 # 脚本核心逻辑
@@ -43,19 +43,18 @@ cleanup_temp_dir() {
 download_script() {
     local script_name="$1"
     local output_path="$TEMP_DIR/$script_name"
-    
     local url="https://raw.githubusercontent.com/$SOURCE_REPOSITORY/$SOURCE_BRANCH/$script_name"
-    
+
     hint "正在下载 $script_name..."
-    
+
     if ! wget -q -O "$output_path" "$url" 2>/dev/null; then
         error "下载 $script_name 失败"
     fi
-    
+
     if [ ! -s "$output_path" ]; then
         error "下载的 $script_name 文件为空"
     fi
-    
+
     chmod +x "$output_path"
     info "已下载 $script_name"
 }
@@ -82,10 +81,10 @@ update_script() {
     local script_name="$1"
     local source_path="$TEMP_DIR/$script_name"
     local target_path="$WORK_DIR/$script_name"
-    
+
     local source_hash=$(get_file_hash "$source_path")
     local target_hash=$(get_file_hash "$target_path")
-    
+
     if [ "$source_hash" != "$target_hash" ]; then
         hint "检测到 $script_name 有更新，正在替换..."
         cp "$source_path" "$target_path"
@@ -100,32 +99,41 @@ update_script() {
 
 # --- 主逻辑 ---
 main() {
-    info "============== 开始更新备份和还原脚本 =============="
-    
+    info "============== 开始更新备份、还原和订阅脚本 =============="
+
     init_temp_dir
     trap cleanup_temp_dir EXIT
-    
+
     local updated=0
-    
+
     # 下载脚本
     download_script "komari_bak.sh"
     download_script "restore.sh"
-    
+    download_script "sub_link.sh"
+
     # 更新脚本
     if update_script "komari_bak.sh"; then
         ((updated++))
     fi
-    
+
     if update_script "restore.sh"; then
         ((updated++))
     fi
-    
+
+    if update_script "sub_link.sh"; then
+        ((updated++))
+        if [ -n "${UUID:-}" ] && [ -n "${ARGO_DOMAIN:-}" ]; then
+            hint "正在重新生成订阅链接..."
+            bash "$WORK_DIR/sub_link.sh" || hint "订阅链接重新生成失败，请检查 UUID、ARGO_DOMAIN 或 CF_IP 配置。"
+        fi
+    fi
+
     if [ $updated -gt 0 ]; then
         info "已更新 $updated 个脚本"
     else
         info "所有脚本都是最新的"
     fi
-    
+
     info "============== 脚本更新完毕 =============="
 }
 
