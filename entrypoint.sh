@@ -14,7 +14,7 @@ RENEW_SCRIPT="/app/renew.sh"
 SUB_LINK_SCRIPT="/app/sub_link.sh"
 CLOUDFLARED_BIN="/app/bin/cloudflared"
 CADDYFILE="/app/Caddyfile"
-SUPERVISOR_CONF="/etc/supervisor/conf.d/damon.conf"
+SUPERVISOR_CONF="/etc/supervisor.d/damon.conf"
 WORK_DIR="/app"
 
 # 首次运行时执行以下流程，再次运行时存在 damon.conf 文件，直接到最后一步
@@ -193,6 +193,7 @@ fi
 chmod +x $BACKUP_SCRIPT $SUB_LINK_SCRIPT $RESTORE_SCRIPT $RENEW_SCRIPT
 
 # 生成 supervisor 配置文件
+mkdir -p "$(dirname "$SUPERVISOR_CONF")" /run
 cat > "$SUPERVISOR_CONF" << 'EOF'
 [supervisord]
 nodaemon=true
@@ -237,4 +238,4 @@ fi
 
 # 启动 supervisor 进程守护
 info "正在启动 Supervisor 进程管理器..."
-supervisord -c /etc/supervisor/supervisord.conf
+exec supervisord -c "$SUPERVISOR_CONF"
