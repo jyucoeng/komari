@@ -261,6 +261,15 @@ fi
 # 赋执行权给所有脚本和应用
 chmod +x $BACKUP_SCRIPT $SUB_LINK_SCRIPT $RESTORE_SCRIPT $RENEW_SCRIPT
 
+if [ "$BACKUP_ENABLED" = "1" ]; then
+    hint "启动前检查远程备份..."
+    if . "$CRON_ENV_FILE" && KOMARI_RESTORE_SKIP_RESTART=1 "$RESTORE_SCRIPT" a; then
+        info "启动前备份检查完成"
+    else
+        hint "启动前自动还原未完成，容器会继续启动，定时任务稍后重试。"
+    fi
+fi
+
 # 生成 supervisor 配置文件
 mkdir -p "$(dirname "$SUPERVISOR_CONF")" /run
 cat > "$SUPERVISOR_CONF" << 'EOF'

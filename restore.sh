@@ -54,7 +54,11 @@ cleanup() {
     [ -n "$DOWNLOAD_PATH" ] && rm -f "$DOWNLOAD_PATH"
     [ -n "$EXTRACT_DIR" ] && [ -d "$EXTRACT_DIR" ] && rm -rf "$EXTRACT_DIR"
     if [ -n "$OLD_DATA_DIR" ] && [ -d "$OLD_DATA_DIR" ]; then
-        rm -rf "$OLD_DATA_DIR"
+        if [ ! -e "$DATA_DIR" ]; then
+            mv "$OLD_DATA_DIR" "$DATA_DIR" 2>/dev/null || rm -rf "$OLD_DATA_DIR"
+        else
+            rm -rf "$OLD_DATA_DIR"
+        fi
     fi
     if [ "$LOCK_ACQUIRED" = "1" ]; then
         rm -rf "$LOCK_DIR" 2>/dev/null || true
@@ -328,6 +332,11 @@ replace_data_dir() {
 
 restart_komari_if_possible() {
     local pid
+
+    if [ "${KOMARI_RESTORE_SKIP_RESTART:-}" = "1" ]; then
+        log "启动前还原已完成，跳过 Komari 进程重启。"
+        return 0
+    fi
 
     if command -v supervisorctl >/dev/null 2>&1; then
         if supervisorctl -c /etc/supervisor.d/damon.conf restart komari >/dev/null 2>&1; then
