@@ -54,11 +54,8 @@ cleanup() {
     [ -n "$DOWNLOAD_PATH" ] && rm -f "$DOWNLOAD_PATH"
     [ -n "$EXTRACT_DIR" ] && [ -d "$EXTRACT_DIR" ] && rm -rf "$EXTRACT_DIR"
     if [ -n "$OLD_DATA_DIR" ] && [ -d "$OLD_DATA_DIR" ]; then
-        if [ ! -e "$DATA_DIR" ]; then
-            mv "$OLD_DATA_DIR" "$DATA_DIR" 2>/dev/null || rm -rf "$OLD_DATA_DIR"
-        else
-            rm -rf "$OLD_DATA_DIR"
-        fi
+        rm -rf "$DATA_DIR"
+        mv "$OLD_DATA_DIR" "$DATA_DIR" 2>/dev/null || rm -rf "$OLD_DATA_DIR"
     fi
     if [ "$LOCK_ACQUIRED" = "1" ]; then
         rm -rf "$LOCK_DIR" 2>/dev/null || true
@@ -316,6 +313,12 @@ replace_data_dir() {
     if [ -d "$DATA_DIR" ]; then
         mv "$DATA_DIR" "$old_dir" || error "移动旧数据目录失败。"
         OLD_DATA_DIR="$old_dir"
+    fi
+
+    # Komari may recreate DATA_DIR between the old-dir move and the restore move.
+    # Remove that fresh placeholder so the backup directory lands at DATA_DIR itself.
+    if [ -e "$DATA_DIR" ]; then
+        rm -rf "$DATA_DIR" || error "清理新建数据目录失败，已停止还原。"
     fi
 
     if mv "$new_data" "$DATA_DIR"; then
