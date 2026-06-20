@@ -73,7 +73,7 @@ docker run -d \
 ### 节点订阅（可选）
 
 - `UUID` - 节点订阅 UUID（未设置则跳过订阅功能）
-- `CF_IP` - CDN 优选 IP 或域名，未设置时使用 `ARGO_DOMAIN`
+- `CF_IP` - CDN 优选 IP 或可用入口域名。未设置时跳过订阅生成，不会默认使用 `ARGO_DOMAIN`
 - `SUB_NAME` - 订阅名称，默认 `komari`
 
 ### 脚本更新来源（可选）
@@ -199,6 +199,7 @@ docker start komari
 
 如果启用了自动更新功能（默认启用），容器会在每天 UTC 时间 03:30 自动从 Github 获取最新的备份、还原和订阅脚本，无需重新构建镜像。
 当前自动更新范围包括 `komari_bak.sh`、`restore.sh` 和 `sub_link.sh`。
+自动更新只替换脚本文件，不会主动重新生成订阅内容。订阅需要在容器启动时或手动运行 `sub_link.sh` 时生成。
 
 **禁用自动更新**：
 ```bash
@@ -219,7 +220,7 @@ docker start komari
 
 1. 容器启动时检查 `UUID`
 2. 如果设置了 UUID，生成 Caddyfile 并启动 Caddy 反代
-3. 调用 sub_link.sh 生成 VLESS 和 VMESS 订阅链接
+3. 如果同时设置了 UUID、ARGO_DOMAIN 和 CF_IP，调用 sub_link.sh 生成 VLESS 和 VMESS 订阅链接
 4. 订阅链接保存到 `/tmp/list.log`
 5. 客户端可通过 Caddy 反代访问订阅文件
 

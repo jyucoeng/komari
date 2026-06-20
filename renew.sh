@@ -122,10 +122,6 @@ main() {
 
     if update_script "sub_link.sh"; then
         ((updated++))
-        if [ -n "${UUID:-}" ] && [ -n "${ARGO_DOMAIN:-}" ]; then
-            hint "正在重新生成订阅链接..."
-            bash "$WORK_DIR/sub_link.sh" || hint "订阅链接重新生成失败，请检查 UUID、ARGO_DOMAIN 或 CF_IP 配置。"
-        fi
     fi
 
     if [ $updated -gt 0 ]; then
