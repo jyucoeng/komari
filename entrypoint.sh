@@ -39,24 +39,45 @@ reject_placeholder() {
     esac
 }
 
+valid_backup_env() {
+    [ -n "${GH_BACKUP_USER:-}" ] && [ -n "${GH_REPO:-}" ] && [ -n "${GH_PAT:-}" ] && [ -n "${GH_EMAIL:-}" ] &&
+    [ "${GH_BACKUP_USER:-}" != "your_github_username" ] &&
+    [ "${GH_REPO:-}" != "your_private_repo_name" ] &&
+    [ "${GH_PAT:-}" != "your_github_personal_access_token" ] &&
+    [ "${GH_EMAIL:-}" != "your_github_email@example.com" ]
+}
+
 # 设置时区（支持通过环境变量自定义，默认 UTC）
 TZ="${TZ:-UTC}"
 export TZ
 
 # 设置 DNS（支持通过环境变量自定义）
 DNS_SERVERS="${DNS_SERVERS:-127.0.0.11 8.8.4.4 223.5.5.5 2001:4860:4860::8844 2400:3200::1}"
-{
-    echo "# DNS 配置"
-    for dns in $DNS_SERVERS; do
-        echo "nameserver $dns"
-    done
-} > /etc/resolv.conf
+if [ "${KOMARI_SKIP_DNS_CONFIG:-}" != "1" ]; then
+    if [ -w /etc/resolv.conf ]; then
+        {
+            echo "# DNS 配置"
+            for dns in $DNS_SERVERS; do
+                echo "nameserver $dns"
+            done
+        } > /etc/resolv.conf || hint "无法写入 /etc/resolv.conf，继续使用平台默认 DNS"
+    else
+        hint "/etc/resolv.conf 不可写，继续使用平台默认 DNS"
+    fi
+fi
 
 # 检查必需的环境变量
-for required_var in ADMIN_USERNAME ADMIN_PASSWORD ARGO_DOMAIN KOMARI_CLOUDFLARED_TOKEN GH_BACKUP_USER GH_REPO GH_PAT GH_EMAIL; do
+for required_var in ADMIN_USERNAME ADMIN_PASSWORD ARGO_DOMAIN KOMARI_CLOUDFLARED_TOKEN; do
     require_env "$required_var"
     reject_placeholder "$required_var"
 done
+
+BACKUP_ENABLED=0
+if valid_backup_env; then
+    BACKUP_ENABLED=1
+else
+    hint "GitHub 备份变量未完整配置，自动备份和自动还原将不会启用。"
+fi
 
 # 设置备份相关的环境变量默认值（使用 UTC 时间）
 BACKUP_TIME=${BACKUP_TIME:-"0 20 * * *"}
@@ -95,10 +116,12 @@ chmod 600 "$CRON_ENV_FILE"
 
 mkdir -p "$CRONTAB_DIR"
 # 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
-echo "$BACKUP_TIME . $CRON_ENV_FILE && $BACKUP_SCRIPT bak" > "$CRONTAB_FILE"
-
-# 添加自动还原任务（每分钟检测一次）
-echo "* * * * * . $CRON_ENV_FILE && $RESTORE_SCRIPT a" >> "$CRONTAB_FILE"
+: > "$CRONTAB_FILE"
+if [ "$BACKUP_ENABLED" = "1" ]; then
+    echo "$BACKUP_TIME . $CRON_ENV_FILE && $BACKUP_SCRIPT bak" >> "$CRONTAB_FILE"
+    # 添加自动还原任务（每分钟检测一次）
+    echo "* * * * * . $CRON_ENV_FILE && $RESTORE_SCRIPT a" >> "$CRONTAB_FILE"
+fi
 
 # 添加脚本更新任务（如果未禁用自动更新，则每天 03:30 UTC 执行）
 # 默认自动更新，用户可通过设置 NO_AUTO_RENEW=1 禁用
