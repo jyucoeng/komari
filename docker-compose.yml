@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   komari:
-    image: ghcr.io/jyucoeng/komari:latest
+    image: ghcr.io/hynize/komari:latest
     container_name: komari
     restart: unless-stopped
     ports:

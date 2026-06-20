@@ -30,7 +30,7 @@ docker run -d \
   # -e UUID="your-uuid-here" \
   # -e CF_IP="your-cf-ip" \
   # -e SUB_NAME="komari" \
-  ghcr.io/jyucoeng/komari:latest
+  ghcr.io/hynize/komari:latest
 ```
 
 ## 必需的环境变量
@@ -106,7 +106,7 @@ docker run -d \
   # 【可选】Caddy 反代端口
   # -e CADDY_PROXY_PORT="8001" \
   # -e CADDY_VERSION="2.9.1" \
-  ghcr.io/jyucoeng/komari:latest
+  ghcr.io/hynize/komari:latest
 ```
 
 **架构说明**：
