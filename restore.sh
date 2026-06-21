@@ -57,8 +57,11 @@ cleanup() {
     [ -n "$DOWNLOAD_PATH" ] && rm -f "$DOWNLOAD_PATH"
     [ -n "$EXTRACT_DIR" ] && [ -d "$EXTRACT_DIR" ] && rm -rf "$EXTRACT_DIR"
     if [ -n "$OLD_DATA_DIR" ] && [ -d "$OLD_DATA_DIR" ]; then
-        rm -rf "$DATA_DIR"
-        mv "$OLD_DATA_DIR" "$DATA_DIR" 2>/dev/null || rm -rf "$OLD_DATA_DIR"
+        rm -rf "${DATA_DIR:?}"/* 2>/dev/null || true
+        rm -rf "${DATA_DIR:?}"/.[!.]* 2>/dev/null || true
+        cp -a "$OLD_DATA_DIR"/* "$DATA_DIR/" 2>/dev/null || true
+        cp -a "$OLD_DATA_DIR"/.* "$DATA_DIR/" 2>/dev/null || true
+        rm -rf "$OLD_DATA_DIR"
     fi
     if [ "$LOCK_ACQUIRED" = "1" ]; then
         rm -rf "$LOCK_DIR" 2>/dev/null || true
@@ -414,22 +417,23 @@ replace_data_dir() {
     rmdir "$old_dir" || error "无法初始化旧数据临时目录。"
 
     if [ -d "$DATA_DIR" ]; then
-        mv "$DATA_DIR" "$old_dir" || error "移动旧数据目录失败。"
+        # Use cp and rm -rf instead of mv to avoid Docker volume "Device or resource busy" error
+        mkdir -p "$old_dir"
+        cp -a "$DATA_DIR"/* "$old_dir/" 2>/dev/null || true
+        cp -a "$DATA_DIR"/.* "$old_dir/" 2>/dev/null || true
+        rm -rf "${DATA_DIR:?}"/* 2>/dev/null || true
+        rm -rf "${DATA_DIR:?}"/.[!.]* 2>/dev/null || true
         OLD_DATA_DIR="$old_dir"
     fi
 
-    # Komari may recreate DATA_DIR between the old-dir move and the restore move.
-    # Remove that fresh placeholder so the backup directory lands at DATA_DIR itself.
-    if [ -e "$DATA_DIR" ]; then
-        rm -rf "$DATA_DIR" || error "清理新建数据目录失败，已停止还原。"
-    fi
-
-    if mv "$new_data" "$DATA_DIR"; then
+    if cp -a "$new_data"/* "$DATA_DIR/" 2>/dev/null || true; then
+        cp -a "$new_data"/.* "$DATA_DIR/" 2>/dev/null || true
         [ -n "$OLD_DATA_DIR" ] && rm -rf "$OLD_DATA_DIR"
         OLD_DATA_DIR=""
     else
         if [ -n "$OLD_DATA_DIR" ] && [ -d "$OLD_DATA_DIR" ]; then
-            mv "$OLD_DATA_DIR" "$DATA_DIR" 2>/dev/null || true
+            cp -a "$OLD_DATA_DIR"/* "$DATA_DIR/" 2>/dev/null || true
+            cp -a "$OLD_DATA_DIR"/.* "$DATA_DIR/" 2>/dev/null || true
         fi
         OLD_DATA_DIR=""
         error "替换数据目录失败，已尝试恢复旧数据。"
