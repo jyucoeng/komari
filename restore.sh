@@ -18,6 +18,15 @@
 #   - 交互选择备份: bash restore.sh
 #===============================================================
 
+# 运行模式检测
+if [ -f /.dockerenv ] || [ -x /app/komari ]; then
+    RUN_MODE="docker"
+    WORK_DIR_DEFAULT="/app"
+else
+    RUN_MODE="vps"
+    WORK_DIR_DEFAULT="${KOMARI_HOME:-/opt/komari}"
+fi
+
 set -o pipefail
 
 #---------------------------------------------------------------
@@ -32,7 +41,7 @@ GH_EMAIL="${GH_EMAIL:-}"
 #---------------------------------------------------------------
 # 面板工作目录配置
 #---------------------------------------------------------------
-WORK_DIR="${WORK_DIR:-/app}"
+WORK_DIR="${WORK_DIR:-$WORK_DIR_DEFAULT}"
 DATA_DIR="${DATA_DIR:-${WORK_DIR}/data}"
 RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore}}"
 RESTORE_LOG="${RESTORE_LOG:-/tmp/restore.log}"
@@ -69,6 +78,7 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
 log() {
+log "restore.sh start - mode: $RUN_MODE args=$*"
     mkdir -p "$(dirname "$RESTORE_LOG")" 2>/dev/null || true
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*" >> "$RESTORE_LOG"
 }
@@ -445,6 +455,13 @@ restart_komari_if_possible() {
     fi
 
     if command -v supervisorctl >/dev/null 2>&1; then
+    # VPS mode - try systemctl first
+    if [ "$RUN_MODE" = "vps" ] && command -v systemctl >/dev/null 2>&1; then
+        if systemctl restart komari 2>/dev/null; then
+            log "Restarted komari via systemctl."
+            return 0
+        fi
+    fi
         if supervisorctl -c /etc/supervisor.d/damon.conf restart komari >/dev/null 2>&1; then
             log "已通过 Supervisor 重启 Komari 进程以加载还原数据"
             return 0

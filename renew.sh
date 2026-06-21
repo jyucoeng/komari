@@ -14,7 +14,23 @@
 #---------------------------------------------------------------
 # 配置
 #---------------------------------------------------------------
-WORK_DIR="${WORK_DIR:-/app}"
+
+# 运行模式检测
+if [ -f /.dockerenv ] || [ -x /app/komari ]; then
+    RUN_MODE="docker"
+    WORK_DIR_DEFAULT="/app"
+else
+    RUN_MODE="vps"
+    WORK_DIR_DEFAULT="${KOMARI_HOME:-/opt/komari}"
+fi
+
+# 日志
+RENEW_LOG="${RENEW_LOG:-/tmp/renew.log}"
+[ "$RUN_MODE" = "vps" ] && RENEW_LOG="${KOMARI_HOME:-/opt/komari}/logs/renew.log"
+mkdir -p "$(dirname "$RENEW_LOG")" 2>/dev/null || true
+log() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*" >> "$RENEW_LOG"; }
+log "renew.sh start - mode: $RUN_MODE"
+WORK_DIR="${WORK_DIR:-$WORK_DIR_DEFAULT}"
 TEMP_DIR="/tmp/renew_scripts"
 REPO_CONF="${REPO_CONF:-$WORK_DIR/repo.conf}"
 if [ -f "$REPO_CONF" ]; then
@@ -60,6 +76,8 @@ download_script() {
     local url="https://raw.githubusercontent.com/$SOURCE_REPOSITORY/$SOURCE_BRANCH/$script_name"
 
     hint "正在下载 $script_name..."
+    log "Downloading $script_name"
+    log "下载 $script_name <- $SOURCE_REPOSITORY/$SOURCE_BRANCH"
 
     if ! wget -q -O "$output_path" "$url" 2>/dev/null; then
         error "下载 $script_name 失败"
@@ -101,6 +119,7 @@ update_script() {
 
     if [ "$source_hash" != "$target_hash" ]; then
         hint "检测到 $script_name 有更新，正在替换..."
+        log "$script_name 有更新 (old=$target_hash new=$source_hash)"
         cp "$source_path" "$target_path"
         chmod +x "$target_path"
         info "$script_name 已更新"
@@ -113,7 +132,9 @@ update_script() {
 
 # --- 主逻辑 ---
 main() {
-    info "============== 开始更新备份、还原和订阅脚本 =============="
+    log "========== Script update start =========="
+    info "============== 开始更新脚本 =============="
+    log "========== 脚本更新开始 (repo=$SOURCE_REPOSITORY branch=$SOURCE_BRANCH) =========="
 
     init_temp_dir
     trap cleanup_temp_dir EXIT
@@ -145,10 +166,16 @@ main() {
 
     if [ $updated -gt 0 ]; then
         info "已更新 $updated 个脚本"
+        log "Updated $updated scripts"
+        log "更新完成: $updated 个脚本已更新。"
     else
         info "所有脚本都是最新的"
+        log "All scripts up to date"
+        log "所有脚本已是最新。"
     fi
 
+    log "========== 脚本更新结束 =========="
+    log "========== Script update end =========="
     info "============== 脚本更新完毕 =============="
 }
 

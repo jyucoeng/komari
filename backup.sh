@@ -15,6 +15,25 @@
 #===============================================================
 
 set -o pipefail
+#---------------------------------------------------------------
+# 运行模式检测（Docker / VPS）
+#---------------------------------------------------------------
+if [ -f /.dockerenv ] || [ -x /app/komari ]; then
+    RUN_MODE="docker"
+    WORK_DIR_DEFAULT="/app"
+else
+    RUN_MODE="vps"
+    WORK_DIR_DEFAULT="${KOMARI_HOME:-/opt/komari}"
+fi
+
+#---------------------------------------------------------------
+# 日志
+#---------------------------------------------------------------
+LOG_FILE="${LOG_FILE:-/tmp/backup.log}"
+[ "$RUN_MODE" = "vps" ] && LOG_FILE="${KOMARI_HOME:-/opt/komari}/logs/backup.log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+log() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+log "backup.sh 启动 — 运行模式: $RUN_MODE | WORK_DIR=$WORK_DIR_DEFAULT"
 
 #---------------------------------------------------------------
 # GITHUB 仓库配置 (建议通过环境变量传递)
@@ -36,7 +55,7 @@ LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
 #---------------------------------------------------------------
 # 面板工作目录配置 (默认与 Dockerfile 中 Komari 的工作路径保持一致)
 #---------------------------------------------------------------
-WORK_DIR="${WORK_DIR:-/app}"
+WORK_DIR="${WORK_DIR:-$WORK_DIR_DEFAULT}"
 DATA_DIR="${DATA_DIR:-${WORK_DIR}/data}"
 
 #---------------------------------------------------------------
@@ -231,6 +250,7 @@ create_data_snapshot() {
     mkdir -p "$BACKUP_STAGE_DIR/data"
 
     hint "正在创建数据快照: $DATA_DIR"
+    log "创建数据快照: $DATA_DIR"
     cp -a "$DATA_DIR"/. "$BACKUP_STAGE_DIR/data"/ || error "复制数据目录失败。"
     snapshot_sqlite_files
     validate_snapshot_types
@@ -316,6 +336,7 @@ prepare_backup_repo() {
 
 do_backup() {
     info "============== 开始执行 Komari 备份任务 =============="
+    log "========== 备份任务开始 =========="
 
     require_command git
     require_command tar
@@ -334,6 +355,7 @@ do_backup() {
     BACKUP_FILE="komari-$TIME.tar.gz"
 
     hint "正在压缩数据快照..."
+    log "压缩数据快照 -> $BACKUP_FILE"
     tar czf "$BACKUP_TEMP_DIR/$BACKUP_FILE" -C "$BACKUP_STAGE_DIR" data/ || error "压缩数据目录失败。"
 
     if [ ! -s "$BACKUP_TEMP_DIR/$BACKUP_FILE" ]; then
@@ -346,6 +368,7 @@ do_backup() {
     BACKUP_SHA256=$(sha256sum "$BACKUP_TEMP_DIR/$BACKUP_FILE" | awk '{print $1}')
     BACKUP_SIZE=$(wc -c < "$BACKUP_TEMP_DIR/$BACKUP_FILE" | tr -d ' ')
     info "文件已压缩为: $BACKUP_FILE"
+    log "备份文件: $BACKUP_FILE sha256=$BACKUP_SHA256 size=$BACKUP_SIZE"
 
     cd "$BACKUP_TEMP_DIR" || error "进入临时仓库目录失败。"
     cleanup_old_backups
@@ -368,11 +391,13 @@ do_backup() {
 
     if git push -u origin "$GH_BACKUP_BRANCH"; then
         mark_local_restore_state "$BACKUP_FILE" "$BACKUP_SHA256"
-        info "备份文件、latest.json 和 README.md 已成功上传至 GitHub。"
+        log "推送成功。"
+    info "备份文件、latest.json 和 README.md 已成功上传至 GitHub。"
     else
         error "上传失败。请检查网络或 GitHub PAT 权限。"
     fi
 
+    log "========== 备份任务完成 =========="
     info "============== 备份任务执行完毕 =============="
 }
 
