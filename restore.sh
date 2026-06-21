@@ -26,6 +26,9 @@ else
     RUN_MODE="vps"
     WORK_DIR_DEFAULT="${KOMARI_HOME:-/opt/komari}"
 fi
+WORK_DIR="${WORK_DIR:-$WORK_DIR_DEFAULT}"
+CONF_DIR="${CONF_DIR:-${WORK_DIR}/conf}"
+SCRIPT_DIR="${SCRIPT_DIR:-${WORK_DIR}/scripts}"
 
 set -o pipefail
 
@@ -41,20 +44,27 @@ GH_EMAIL="${GH_EMAIL:-}"
 #---------------------------------------------------------------
 # 面板工作目录配置
 #---------------------------------------------------------------
-WORK_DIR="${WORK_DIR:-$WORK_DIR_DEFAULT}"
 DATA_DIR="${DATA_DIR:-${WORK_DIR}/data}"
-RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore}}"
-RESTORE_LOG="${RESTORE_LOG:-/tmp/restore.log}"
+if [ "$RUN_MODE" = "vps" ]; then
+    RESTORE_LOG="${RESTORE_LOG:-${WORK_DIR}/logs/restore.log}"
+    BACKUP_SCRIPT_DEFAULT="${SCRIPT_DIR}/backup.sh"
+    RESTORE_STATE_DEFAULT="${WORK_DIR}/logs/last_restore"
+else
+    RESTORE_LOG="${RESTORE_LOG:-/tmp/restore.log}"
+    BACKUP_SCRIPT_DEFAULT="${WORK_DIR}/backup.sh"
+    RESTORE_STATE_DEFAULT="/tmp/last_restore"
+fi
 LOCK_DIR="${KOMARI_BACKUP_LOCK_DIR:-/tmp/komari-backup-restore.lock}"
 LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
-BACKUP_SCRIPT="${BACKUP_SCRIPT:-${WORK_DIR}/backup.sh}"
+BACKUP_SCRIPT="${BACKUP_SCRIPT:-${BACKUP_SCRIPT_DEFAULT}}"
+RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-$RESTORE_STATE_DEFAULT}}"
 NO_ACTION_FLAG="${KOMARI_NO_ACTION_FLAG:-/tmp/komari-no-action}"
 
 #---------------------------------------------------------------
 # 脚本核心逻辑
 #---------------------------------------------------------------
 info() { echo -e "\033[32m\033[01m$*\033[0m"; }
-error() { echo -e "\033[31m\033[01m$*\033[0m" >&2; exit 1; }
+error() { log "ERROR: $*"; echo -e "\033[31m\033[01m$*\033[0m" >&2; exit 1; }
 hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 
 DOWNLOAD_PATH=""
@@ -78,10 +88,22 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
 log() {
-log "restore.sh start - mode: $RUN_MODE args=$*"
     mkdir -p "$(dirname "$RESTORE_LOG")" 2>/dev/null || true
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*" >> "$RESTORE_LOG"
 }
+
+load_env_file() {
+    local env_file="${KOMARI_ENV_FILE:-${CONF_DIR}/.env}"
+    if [ -f "$env_file" ]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        . "$env_file"
+        set +o allexport
+        log "已加载环境配置: $env_file"
+    fi
+}
+load_env_file
+log "restore.sh start - mode: $RUN_MODE args=$*"
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || error "缺少必需命令: $1"
@@ -454,14 +476,15 @@ restart_komari_if_possible() {
         return 0
     fi
 
-    if command -v supervisorctl >/dev/null 2>&1; then
-    # VPS mode - try systemctl first
     if [ "$RUN_MODE" = "vps" ] && command -v systemctl >/dev/null 2>&1; then
         if systemctl restart komari 2>/dev/null; then
-            log "Restarted komari via systemctl."
+            log "已通过 systemctl 重启 Komari 进程以加载还原数据。"
             return 0
         fi
+        log "systemctl 重启 Komari 失败，继续尝试其他方式。"
     fi
+
+    if command -v supervisorctl >/dev/null 2>&1; then
         if supervisorctl -c /etc/supervisor.d/damon.conf restart komari >/dev/null 2>&1; then
             log "已通过 Supervisor 重启 Komari 进程以加载还原数据"
             return 0

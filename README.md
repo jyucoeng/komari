@@ -12,6 +12,30 @@
 
 ## 快速开始
 
+### 一键安装菜单
+
+服务器上推荐直接运行安装菜单，可选择 Docker 安装或普通 Linux/VPS 安装；二次运行会提示保留配置重装或卸载。
+
+```bash
+git clone https://github.com/hynize/komari.git
+cd komari
+sudo bash install.sh
+```
+
+普通 VPS 安装完成后，主要使用：
+
+```bash
+komari-cli status
+komari-cli backup
+komari-cli restore f
+komari-cli update
+komari-cli logs caddy
+```
+
+普通 VPS 配置文件在 `/opt/komari/conf/.env`，日志在 `/opt/komari/logs`。
+
+### Docker 运行
+
 ```bash
 IMAGE="ghcr.io/hynize/komari:latest"
 GH_BACKUP_USER="your_github_username"
@@ -67,7 +91,7 @@ docker run -d \
 
 ### 版本和脚本来源
 
-- `KOMARI_VERSION` - 构建镜像时使用的上游 `ghcr.io/komari-monitor/komari` 镜像 tag；为空或未指定时使用 `latest`。它只影响打包时选择哪个上游 Komari 版本，不影响 `repo.conf`
+- `KOMARI_VERSION` - 指定上游 Komari 版本；Docker 构建时作为 `ghcr.io/komari-monitor/komari` 镜像 tag，普通 VPS 安装时会尝试下载对应 release，未指定或为空时使用 `latest`。它不影响 `repo.conf`
 - `KOMARI_SOURCE_REPOSITORY` - 自动更新脚本来源仓库，默认来自 `repo.conf`
 - `KOMARI_SOURCE_BRANCH` - 自动更新脚本来源分支，默认来自 `repo.conf`
 
@@ -130,7 +154,7 @@ Caddy (:8001)
 
 备份仓库中会生成这些文件：
 
-- `komari-YYYY-MM-DD-HHMMSS.tar.gz` - 实际数据包，内容是 `/app/data`
+- `komari-YYYY-MM-DD-HHMMSS.tar.gz` - 实际数据包，内容是 Komari 的 `data/` 目录
 - `latest.json` - 最新备份索引，记录文件名、大小、sha256 和创建时间
 - `README.md` - 人可读的最新备份摘要，也可以用来触发立即备份
 
@@ -160,12 +184,26 @@ Caddy (:8001)
 docker exec komari tail -n 100 /tmp/backup.log
 ```
 
+普通 VPS 查看日志：
+
+```bash
+tail -n 100 /opt/komari/logs/backup.log
+```
+
 ### 立即备份
 
 容器运行后，可以手动立刻备份一次：
 
 ```bash
 docker exec komari /app/backup.sh
+```
+
+普通 VPS：
+
+```bash
+komari-cli backup
+# 或
+bash /opt/komari/scripts/backup.sh
 ```
 
 如果是在容器内部执行，使用：
@@ -212,6 +250,13 @@ docker exec komari tail -n 100 /tmp/restore-cron.log
 docker exec komari tail -n 100 /tmp/restore.log
 ```
 
+普通 VPS 查看日志：
+
+```bash
+tail -n 100 /opt/komari/logs/restore-cron.log
+tail -n 100 /opt/komari/logs/restore.log
+```
+
 ### 手动还原
 
 强制还原 `latest.json` 或 `README.md` 指向的最新备份：
@@ -220,16 +265,34 @@ docker exec komari tail -n 100 /tmp/restore.log
 docker exec komari /app/restore.sh f
 ```
 
+普通 VPS：
+
+```bash
+komari-cli restore f
+```
+
 列出备份文件并交互选择一个版本还原：
 
 ```bash
 docker exec -it komari /app/restore.sh
 ```
 
+普通 VPS：
+
+```bash
+komari-cli restore
+```
+
 指定某个备份文件还原：
 
 ```bash
 docker exec komari /app/restore.sh komari-2024-01-01-120000.tar.gz
+```
+
+普通 VPS：
+
+```bash
+komari-cli restore komari-2024-01-01-120000.tar.gz
 ```
 
 还原时脚本会先下载到临时文件，校验大小、sha256、tar 完整性和包内路径，确认只包含 `data/` 下的普通文件/目录后才替换现有数据目录。替换失败会尝试回滚旧数据。
@@ -247,12 +310,19 @@ docker restart komari
 - `repo.conf`
 - `backup.sh`
 - `restore.sh`
+- `renew.sh`
 - `sub_link.sh`
 
 自动更新只替换脚本文件，不会主动重新生成订阅。订阅在容器启动时生成，也可手动运行：
 
 ```bash
 docker exec komari /app/sub_link.sh
+```
+
+普通 VPS 更新脚本：
+
+```bash
+komari-cli update
 ```
 
 ## 使用 Docker Compose

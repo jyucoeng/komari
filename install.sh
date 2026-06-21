@@ -105,7 +105,11 @@ pkg_install() {
             apt-get update -qq && apt-get install -y -qq "$@"
             ;;
         rhel)
-            yum install -y -q "$@"
+            if command -v dnf >/dev/null 2>&1; then
+                dnf install -y -q "$@"
+            else
+                yum install -y -q "$@"
+            fi
             ;;
         alpine)
             apk add --no-cache "$@"
@@ -122,6 +126,65 @@ service_exists() {
 
 service_active() {
     systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+enable_cron_service() {
+    if command -v systemctl >/dev/null 2>&1; then
+        for svc in cron crond; do
+            if systemctl list-unit-files 2>/dev/null | grep -q "^${svc}\.service"; then
+                systemctl enable "$svc" >/dev/null 2>&1 || true
+                systemctl start "$svc" >/dev/null 2>&1 || true
+                return 0
+            fi
+        done
+    fi
+    if command -v service >/dev/null 2>&1; then
+        service cron start >/dev/null 2>&1 || service crond start >/dev/null 2>&1 || true
+    fi
+    if command -v rc-service >/dev/null 2>&1; then
+        rc-update add crond default >/dev/null 2>&1 || true
+        rc-service crond start >/dev/null 2>&1 || true
+    fi
+}
+
+vps_require_systemd() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        fatal "Native VPS install requires systemd. Please use Docker mode on this system."
+    fi
+}
+
+shell_quote() {
+    printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\''/g")"
+}
+
+docker_compose_available() {
+    docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1
+}
+
+docker_compose() {
+    if docker compose version >/dev/null 2>&1; then
+        docker compose "$@"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        docker-compose "$@"
+    else
+        return 127
+    fi
+}
+
+docker_compose_cmd() {
+    if docker compose version >/dev/null 2>&1; then
+        printf 'docker compose'
+    else
+        printf 'docker-compose'
+    fi
+}
+
+valid_cron_expr() {
+    local expr="$1" field_count
+    [ -n "$expr" ] || return 1
+    printf "%s" "$expr" | grep -q '[[:cntrl:]]' && return 1
+    field_count=$(printf "%s\n" "$expr" | awk '{print NF; exit}')
+    [ "$field_count" = "5" ]
 }
 
 # ---- Detection ---------------------------------------------------------------
@@ -215,11 +278,11 @@ docker_install() {
     if ! command -v docker >/dev/null 2>&1; then
         fatal "Docker is not installed. Please install Docker first: https://docs.docker.com/engine/install/"
     fi
-    if ! command -v docker compose >/dev/null 2>&1; then
-        if ! command -v docker-compose >/dev/null 2>&1; then
-            fatal "Docker Compose is not installed. Please install Docker Compose first."
-        fi
+    if ! docker_compose_available; then
+        fatal "Docker Compose is not installed. Please install Docker Compose first."
     fi
+    local compose_cmd
+    compose_cmd="$(docker_compose_cmd)"
 
     if [ ! -f "${SCRIPT_SOURCE_DIR}/docker-compose.yml" ]; then
         fatal "docker-compose.yml not found in ${SCRIPT_SOURCE_DIR}. Please ensure the repository is cloned."
@@ -240,7 +303,7 @@ docker_install() {
         if confirm "Open the .env file for editing now?"; then
             ${EDITOR:-vi} "${SCRIPT_SOURCE_DIR}/.env"
         else
-            hint "Please edit ${SCRIPT_SOURCE_DIR}/.env manually before running 'docker compose up -d'."
+            hint "Please edit ${SCRIPT_SOURCE_DIR}/.env manually before running '${compose_cmd} up -d'."
         fi
     else
         ok ".env already exists at ${SCRIPT_SOURCE_DIR}/.env"
@@ -248,23 +311,23 @@ docker_install() {
 
     echo ""
     info "Pulling Docker images..."
-    (cd "$SCRIPT_SOURCE_DIR" && docker compose pull)
+    (cd "$SCRIPT_SOURCE_DIR" && docker_compose pull)
 
     echo ""
     info "Starting komari containers..."
-    (cd "$SCRIPT_SOURCE_DIR" && docker compose up -d)
+    (cd "$SCRIPT_SOURCE_DIR" && docker_compose up -d)
 
     echo ""
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "komari"; then
         ok "Komari (Docker) is now running."
         echo ""
         info "Useful commands:"
-        info "  View logs: docker compose -f ${SCRIPT_SOURCE_DIR}/docker-compose.yml logs -f"
-        info "  Restart:   docker compose -f ${SCRIPT_SOURCE_DIR}/docker-compose.yml restart"
-        info "  Stop:      docker compose -f ${SCRIPT_SOURCE_DIR}/docker-compose.yml stop"
-        info "  Update:    docker compose pull && docker compose up -d"
+        info "  View logs: ${compose_cmd} -f ${SCRIPT_SOURCE_DIR}/docker-compose.yml logs -f"
+        info "  Restart:   ${compose_cmd} -f ${SCRIPT_SOURCE_DIR}/docker-compose.yml restart"
+        info "  Stop:      ${compose_cmd} -f ${SCRIPT_SOURCE_DIR}/docker-compose.yml stop"
+        info "  Update:    ${compose_cmd} pull && ${compose_cmd} up -d"
     else
-        fail "Komari container failed to start. Check logs with: docker compose logs"
+        fail "Komari container failed to start. Check logs with: ${compose_cmd} logs"
     fi
 }
 
@@ -289,8 +352,21 @@ vps_detect_os() {
 }
 
 vps_install_deps() {
-    info "Installing dependencies: curl wget git sqlite jq tar unzip..."
-    pkg_install curl wget git sqlite jq tar unzip
+    info "Installing dependencies: curl wget git sqlite jq tar unzip cron..."
+    case "$(os_family)" in
+        debian)
+            pkg_install curl wget git sqlite3 jq tar unzip cron
+            ;;
+        rhel)
+            pkg_install curl wget git sqlite jq tar unzip cronie
+            ;;
+        alpine)
+            pkg_install curl wget git sqlite jq tar unzip dcron
+            ;;
+        *)
+            pkg_install curl wget git sqlite jq tar unzip
+            ;;
+    esac
 }
 
 vps_create_dirs() {
@@ -317,6 +393,7 @@ vps_download_komari() {
     local arch
     arch="$(platform_arch)"
     local bin_path="${BIN_DIR}/komari"
+    local version="${KOMARI_VERSION:-latest}"
 
     if [ -x "$bin_path" ]; then
         skip "Komari binary already exists at ${bin_path}."
@@ -324,26 +401,43 @@ vps_download_komari() {
     fi
 
     info "Downloading Komari binary..."
-    local gh_releases_url
+    local gh_releases_url tmp_bin
+    tmp_bin="/tmp/komari-linux-${arch}.$$"
     for repo in "komari-monitor/komari" "$KOMARI_SOURCE_REPOSITORY"; do
-        gh_releases_url="https://github.com/${repo}/releases/latest/download/komari-linux-${arch}.tar.gz"
-        info "Trying: ${gh_releases_url}"
-        if wget -q --timeout=10 --tries=2 -O /tmp/komari.tar.gz "$gh_releases_url" 2>/dev/null; then
-            info "Downloaded from GitHub releases (${repo})."
-            tar xzf /tmp/komari.tar.gz -C "$BIN_DIR" komari 2>/dev/null || \
-            tar xzf /tmp/komari.tar.gz -C "$BIN_DIR" 2>/dev/null || \
-            { fail "Failed to extract komari binary."; rm -f /tmp/komari.tar.gz; continue; }
-            rm -f /tmp/komari.tar.gz
-            chmod +x "$bin_path"
-            ok "Komari binary installed at ${bin_path}"
-            return 0
+        if [ -z "$repo" ]; then
+            continue
         fi
-        rm -f /tmp/komari.tar.gz
+        if [ -z "$version" ] || [ "$version" = "latest" ]; then
+            gh_releases_url="https://github.com/${repo}/releases/latest/download/komari-linux-${arch}"
+            info "Trying: ${gh_releases_url}"
+            if wget -q --timeout=10 --tries=2 -O "$tmp_bin" "$gh_releases_url" 2>/dev/null && [ -s "$tmp_bin" ]; then
+                info "Downloaded from GitHub releases (${repo})."
+                mv "$tmp_bin" "$bin_path"
+                chmod +x "$bin_path"
+                ok "Komari binary installed at ${bin_path}"
+                return 0
+            fi
+            rm -f "$tmp_bin"
+        else
+            local tag
+            for tag in "$version" "v${version#v}"; do
+                gh_releases_url="https://github.com/${repo}/releases/download/${tag}/komari-linux-${arch}"
+                info "Trying: ${gh_releases_url}"
+                if wget -q --timeout=10 --tries=2 -O "$tmp_bin" "$gh_releases_url" 2>/dev/null && [ -s "$tmp_bin" ]; then
+                    info "Downloaded ${tag} from GitHub releases (${repo})."
+                    mv "$tmp_bin" "$bin_path"
+                    chmod +x "$bin_path"
+                    ok "Komari binary installed at ${bin_path}"
+                    return 0
+                fi
+                rm -f "$tmp_bin"
+            done
+        fi
     done
 
     if command -v docker >/dev/null 2>&1; then
         info "GitHub releases failed. Attempting to extract komari binary from GHCR image..."
-        local ghcr_image="ghcr.io/komari-monitor/komari:latest"
+        local ghcr_image="ghcr.io/komari-monitor/komari:${version:-latest}"
         info "Pulling ${ghcr_image}..."
         if docker pull "$ghcr_image" 2>/dev/null; then
             local tmp_container
@@ -599,6 +693,49 @@ STARTSCRIPT
     chmod +x "${SCRIPT_DIR}/start.sh"
     ok "Created start.sh"
 
+    # --- Create komari-start wrapper ---
+    info "Creating komari-start wrapper..."
+    cat > "${SCRIPT_DIR}/komari-start.sh" << 'KOMARISTART'
+#!/usr/bin/env bash
+set -o errexit
+CONF_DIR="/opt/komari/conf"
+BIN_DIR="/opt/komari/bin"
+DATA_DIR="/opt/komari/data"
+if [ -f "${CONF_DIR}/.env" ]; then
+    set -o allexport
+    . "${CONF_DIR}/.env"
+    set +o allexport
+fi
+truthy() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+disable_remote_features() {
+    local db="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
+    [ -f "$db" ] || return 0
+    command -v sqlite3 >/dev/null 2>&1 || command -v sqlite >/dev/null 2>&1 || return 0
+    local sqlite_bin
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || command -v sqlite 2>/dev/null)"
+    "$sqlite_bin" "$db" "INSERT INTO configs(key, value) VALUES ('terminal_enabled','false'),('web_ssh_enabled','false'),('remote_terminal_enabled','false'),('remote_execute_enabled','false'),('remote_command_enabled','false'),('command_execute_enabled','false'),('disable_web_ssh','true'),('disable_remote','true'),('disable_command_execute','true'),('disable_terminal','true') ON CONFLICT(key) DO UPDATE SET value=excluded.value;" >/dev/null 2>&1 || true
+    "$sqlite_bin" "$db" "UPDATE configs SET terminal_enabled=0, web_ssh_enabled=0, remote_terminal_enabled=0, remote_execute_enabled=0, remote_command_enabled=0, command_execute_enabled=0 WHERE id IS NOT NULL;" >/dev/null 2>&1 || true
+}
+KOMARI_LISTEN_ADDR="${KOMARI_LISTEN_ADDR:-0.0.0.0:25774}"
+KOMARI_DISABLE_WEB_SSH="${KOMARI_DISABLE_WEB_SSH:-${DISABLE_WEB_SSH:-1}}"
+KOMARI_DISABLE_REMOTE="${KOMARI_DISABLE_REMOTE:-${DISABLE_REMOTE:-1}}"
+if truthy "$KOMARI_DISABLE_WEB_SSH" || truthy "$KOMARI_DISABLE_REMOTE"; then
+    disable_remote_features
+fi
+args=(server -l "$KOMARI_LISTEN_ADDR")
+if truthy "$KOMARI_DISABLE_WEB_SSH" && "$BIN_DIR/komari" server --help 2>&1 | grep -q -- '--disable-web-ssh'; then
+    args+=(--disable-web-ssh)
+fi
+exec "$BIN_DIR/komari" "${args[@]}"
+KOMARISTART
+    chmod +x "${SCRIPT_DIR}/komari-start.sh"
+    ok "Created komari-start wrapper"
+
     # --- Create stop.sh ---
     cat > "${SCRIPT_DIR}/stop.sh" << 'STOPSCRIPT'
 #!/usr/bin/env bash
@@ -653,7 +790,7 @@ ARGO_DOMAIN=your-argo-domain.com
 KOMARI_CLOUDFLARED_TOKEN=eyJxxxxx
 
 # Backup schedule (UTC cron format)
-BACKUP_TIME=0 20 * * *
+BACKUP_TIME="0 20 * * *"
 BACKUP_DAYS=10
 KOMARI_LOCK_TIMEOUT_SECONDS=60
 
@@ -727,7 +864,7 @@ User=komari
 Group=komari
 WorkingDirectory=${WORK_DIR}
 EnvironmentFile=${CONF_DIR}/.env
-ExecStart=${BIN_DIR}/komari server -l ${KOMARI_LISTEN_ADDR}
+ExecStart=${SCRIPT_DIR}/komari-start.sh
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
@@ -832,6 +969,9 @@ vps_setup_cron() {
     if [ -f "$env_file" ]; then
         . "$env_file"
     fi
+    if ! valid_cron_expr "$BACKUP_TIME"; then
+        fatal "BACKUP_TIME must be a 5-field cron expression, for example: 0 */1 * * *"
+    fi
 
     crontab -l 2>/dev/null | grep -v "/opt/komari" | crontab - 2>/dev/null || true
 
@@ -849,6 +989,11 @@ export GH_PAT="${GH_PAT:-}"
 export GH_EMAIL="${GH_EMAIL:-}"
 export BACKUP_DAYS="${BACKUP_DAYS:-10}"
 export KOMARI_LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
+export KOMARI_HOME="/opt/komari"
+export KOMARI_ENV_FILE="/opt/komari/conf/.env"
+export BACKUP_SCRIPT="/opt/komari/scripts/backup.sh"
+export RESTORE_LOG="/opt/komari/logs/restore.log"
+export RENEW_LOG="/opt/komari/logs/renew.log"
 export UUID="${UUID:-}"
 export ARGO_DOMAIN="${ARGO_DOMAIN:-}"
 export CF_IP="${CF_IP:-ip.sb}"
@@ -860,23 +1005,25 @@ export WORK_DIR="/opt/komari"
 export DATA_DIR="/opt/komari/data"
 export SCRIPT_DIR="/opt/komari/scripts"
 export CONF_DIR="/opt/komari/conf"
+export REPO_CONF="/opt/komari/conf/repo.conf"
 CRONENV
     chmod 600 "$cron_env"
 
     {
         echo "# Komari backup"
-        echo "${BACKUP_TIME} . ${cron_env} && bash ${SCRIPT_DIR}/backup.sh >> ${LOG_DIR}/backup.log 2>&1"
+        echo "${BACKUP_TIME} . $(shell_quote "$cron_env") && bash $(shell_quote "${SCRIPT_DIR}/backup.sh") >> $(shell_quote "${LOG_DIR}/backup.log") 2>&1"
         echo "# Komari auto-restore"
-        echo "* * * * * . ${cron_env} && bash ${SCRIPT_DIR}/restore.sh a >> ${LOG_DIR}/restore-cron.log 2>&1"
+        echo "* * * * * . $(shell_quote "$cron_env") && bash $(shell_quote "${SCRIPT_DIR}/restore.sh") a >> $(shell_quote "${LOG_DIR}/restore-cron.log") 2>&1"
     } >> "$cron_file"
 
     if [ -z "${NO_AUTO_RENEW:-}" ]; then
         echo "# Komari auto-renew" >> "$cron_file"
-        echo "30 3 * * * . ${cron_env} && bash ${SCRIPT_DIR}/renew.sh >> ${LOG_DIR}/renew.log 2>&1" >> "$cron_file"
+        echo "30 3 * * * . $(shell_quote "$cron_env") && bash $(shell_quote "${SCRIPT_DIR}/renew.sh") >> $(shell_quote "${LOG_DIR}/renew.log") 2>&1" >> "$cron_file"
     fi
 
     crontab "$cron_file"
     rm -f "$cron_file"
+    enable_cron_service
     ok "Cron jobs installed."
 }
 
@@ -910,6 +1057,12 @@ BIN_DIR="/opt/komari/bin"
 SCRIPT_DIR="/opt/komari/scripts"
 CONF_DIR="/opt/komari/conf"
 LOG_DIR="/opt/komari/logs"
+DATA_DIR="/opt/komari/data"
+export KOMARI_HOME="$WORK_DIR"
+export KOMARI_ENV_FILE="${CONF_DIR}/.env"
+export WORK_DIR DATA_DIR SCRIPT_DIR CONF_DIR
+export BACKUP_SCRIPT="${SCRIPT_DIR}/backup.sh"
+export REPO_CONF="${CONF_DIR}/repo.conf"
 
 GREEN='\033[32m'; RED='\033[31m'; YELLOW='\033[33m'; CYAN='\033[36m'; NC='\033[0m'; BOLD='\033[01m'
 info()  { echo -e "${GREEN}${BOLD}$*${NC}"; }
@@ -976,7 +1129,7 @@ case "${1:-help}" in
             tail -f "${LOG_DIR}/komari.log" "${LOG_DIR}/caddy.log" "${LOG_DIR}/cloudflared.log" "${LOG_DIR}/xray.log" 2>/dev/null || \
             hint "No log files found in ${LOG_DIR}"
         else
-            local log_file="${LOG_DIR}/${svc}.log"
+            log_file="${LOG_DIR}/${svc}.log"
             if [ -f "$log_file" ]; then
                 tail -f "$log_file"
             else
@@ -1037,6 +1190,7 @@ vps_install() {
     echo ""
 
     vps_detect_os
+    vps_require_systemd
     vps_install_deps
     vps_create_dirs
     vps_create_user
@@ -1106,7 +1260,10 @@ reinstall_keep_config() {
     if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "komari"; then
         info "Docker mode detected. Re-pulling and restarting..."
         if [ -f "${SCRIPT_SOURCE_DIR}/docker-compose.yml" ]; then
-            (cd "$SCRIPT_SOURCE_DIR" && docker compose pull && docker compose up -d) || \
+            if ! docker_compose_available; then
+                fatal "Docker Compose is not installed. Please install Docker Compose first."
+            fi
+            (cd "$SCRIPT_SOURCE_DIR" && docker_compose pull && docker_compose up -d) || \
             fatal "Docker compose failed."
         else
             local image
@@ -1114,7 +1271,10 @@ reinstall_keep_config() {
             docker pull "$image"
             docker stop komari 2>/dev/null || true
             docker rm komari 2>/dev/null || true
-            (cd "$SCRIPT_SOURCE_DIR" && docker compose up -d) 2>/dev/null || \
+            if ! docker_compose_available; then
+                fatal "Docker Compose is not installed. Please restart the container manually."
+            fi
+            (cd "$SCRIPT_SOURCE_DIR" && docker_compose up -d) 2>/dev/null || \
             fatal "Please restart the container manually."
         fi
         ok "Docker container re-installed and restarted."
@@ -1183,9 +1343,9 @@ reinstall_keep_config() {
 main_menu() {
     clear 2>/dev/null || true
 
-    cyan "¨X¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨["
-    cyan "¨U         Komari Dashboard Installer               ¨U"
-    cyan "¨^¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨a"
+    cyan "+--------------------------------------------------+"
+    cyan "|          Komari Dashboard Installer             |"
+    cyan "+--------------------------------------------------+"
     echo ""
 
     if detect_installed; then
