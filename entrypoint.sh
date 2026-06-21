@@ -9,10 +9,12 @@ hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 CRON_ENV_FILE="/app/cron_env.sh"
 CRONTAB_DIR="/etc/crontabs"
 CRONTAB_FILE="$CRONTAB_DIR/root"
-BACKUP_SCRIPT="/app/komari_bak.sh"
+BACKUP_SCRIPT="/app/backup.sh"
 RESTORE_SCRIPT="/app/restore.sh"
 RENEW_SCRIPT="/app/renew.sh"
 SUB_LINK_SCRIPT="/app/sub_link.sh"
+REPO_CONF="/app/repo.conf"
+XRAY_BIN="/app/bin/xray"
 CLOUDFLARED_BIN="/app/bin/cloudflared"
 CADDYFILE="/app/Caddyfile"
 SUPERVISOR_CONF="/etc/supervisor.d/damon.conf"
@@ -46,6 +48,35 @@ valid_backup_env() {
     [ "${GH_PAT:-}" != "your_github_personal_access_token" ] &&
     [ "${GH_EMAIL:-}" != "your_github_email@example.com" ]
 }
+
+valid_cron_expr() {
+    local expr="$1" field_count
+    [ -n "$expr" ] || return 1
+    printf "%s" "$expr" | grep -q '[[:cntrl:]]' && return 1
+    field_count=$(printf "%s\n" "$expr" | awk '{print NF; exit}')
+    [ "$field_count" = "5" ]
+}
+
+shell_quote() {
+    printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\''/g")"
+}
+
+append_cron_job() {
+    local schedule="$1"
+    shift
+    printf '%s %s\n' "$schedule" "$*" >> "$CRONTAB_FILE"
+}
+
+truthy() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if [ -f "$REPO_CONF" ]; then
+    . "$REPO_CONF"
+fi
 
 # 设置时区（支持通过环境变量自定义，默认 UTC）
 TZ="${TZ:-UTC}"
@@ -81,6 +112,9 @@ fi
 
 # 设置备份相关的环境变量默认值（使用 UTC 时间）
 BACKUP_TIME=${BACKUP_TIME:-"0 20 * * *"}
+if ! valid_cron_expr "$BACKUP_TIME"; then
+    error "错误：BACKUP_TIME 必须是 5 段 cron 表达式，例如 '0 */1 * * *'"
+fi
 BACKUP_DAYS=${BACKUP_DAYS:-"10"}
 if ! echo "$BACKUP_DAYS" | grep -Eq '^[1-9][0-9]*$'; then
     error "错误：BACKUP_DAYS 必须是大于等于 1 的整数"
@@ -88,6 +122,11 @@ fi
 
 # 配置 Caddy 端口
 CADDY_PROXY_PORT=${CADDY_PROXY_PORT:-'8001'}
+XRAY_VLESS_PORT=${XRAY_VLESS_PORT:-'8002'}
+XRAY_VMESS_PORT=${XRAY_VMESS_PORT:-'8003'}
+KOMARI_LISTEN_ADDR=${KOMARI_LISTEN_ADDR:-'0.0.0.0:25774'}
+KOMARI_DISABLE_WEB_SSH=${KOMARI_DISABLE_WEB_SSH:-${DISABLE_WEB_SSH:-1}}
+KOMARI_DISABLE_REMOTE=${KOMARI_DISABLE_REMOTE:-${DISABLE_REMOTE:-1}}
 
 # Caddy 版本配置
 if [[ "$CADDY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -107,26 +146,30 @@ echo "export KOMARI_LOCK_TIMEOUT_SECONDS=\"$KOMARI_LOCK_TIMEOUT_SECONDS\"" >> "$
 echo "export TZ=\"$TZ\"" >> "$CRON_ENV_FILE"
 echo "export KOMARI_SOURCE_REPOSITORY=\"$KOMARI_SOURCE_REPOSITORY\"" >> "$CRON_ENV_FILE"
 echo "export KOMARI_SOURCE_BRANCH=\"$KOMARI_SOURCE_BRANCH\"" >> "$CRON_ENV_FILE"
+echo "export KOMARI_PROJECT_OWNER=\"$KOMARI_PROJECT_OWNER\"" >> "$CRON_ENV_FILE"
+echo "export KOMARI_PROJECT_NAME=\"$KOMARI_PROJECT_NAME\"" >> "$CRON_ENV_FILE"
 echo "export UUID=\"$UUID\"" >> "$CRON_ENV_FILE"
 echo "export ARGO_DOMAIN=\"$ARGO_DOMAIN\"" >> "$CRON_ENV_FILE"
 echo "export CF_IP=\"$CF_IP\"" >> "$CRON_ENV_FILE"
 echo "export SUB_NAME=\"$SUB_NAME\"" >> "$CRON_ENV_FILE"
 echo "export CADDY_PROXY_PORT=\"$CADDY_PROXY_PORT\"" >> "$CRON_ENV_FILE"
+echo "export XRAY_VLESS_PORT=\"$XRAY_VLESS_PORT\"" >> "$CRON_ENV_FILE"
+echo "export XRAY_VMESS_PORT=\"$XRAY_VMESS_PORT\"" >> "$CRON_ENV_FILE"
 chmod 600 "$CRON_ENV_FILE"
 
 mkdir -p "$CRONTAB_DIR"
 # 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
 : > "$CRONTAB_FILE"
 if [ "$BACKUP_ENABLED" = "1" ]; then
-    echo "$BACKUP_TIME . $CRON_ENV_FILE && $BACKUP_SCRIPT bak" >> "$CRONTAB_FILE"
+    append_cron_job "$BACKUP_TIME" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$BACKUP_SCRIPT") bak >> /tmp/backup.log 2>&1"
     # 添加自动还原任务（每分钟检测一次）
-    echo "* * * * * . $CRON_ENV_FILE && $RESTORE_SCRIPT a" >> "$CRONTAB_FILE"
+    append_cron_job "* * * * *" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$RESTORE_SCRIPT") a >> /tmp/restore-cron.log 2>&1"
 fi
 
 # 添加脚本更新任务（如果未禁用自动更新，则每天 03:30 UTC 执行）
 # 默认自动更新，用户可通过设置 NO_AUTO_RENEW=1 禁用
 if [ -z "$NO_AUTO_RENEW" ]; then
-    echo "30 3 * * * . $CRON_ENV_FILE && $RENEW_SCRIPT" >> "$CRONTAB_FILE"
+    append_cron_job "30 3 * * *" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$RENEW_SCRIPT") >> /tmp/renew.log 2>&1"
 fi
 
 # 处理 KOMARI_CLOUDFLARED_TOKEN 格式（JSON 或 Token）
@@ -210,6 +253,26 @@ if [ ! -x "$CLOUDFLARED_BIN" ]; then
 else
     info "Cloudflared 已安装，跳过下载"
 fi
+
+if [ -n "${UUID:-}" ] && [ "$UUID" != "0" ]; then
+    if [ ! -x "$XRAY_BIN" ]; then
+        info "正在下载 Xray 订阅后端..."
+        mkdir -p "$(dirname "$XRAY_BIN")"
+        case "$ARCH" in
+            amd64) XRAY_ASSET="Xray-linux-64.zip" ;;
+            arm64) XRAY_ASSET="Xray-linux-arm64-v8a.zip" ;;
+            arm) XRAY_ASSET="Xray-linux-arm32-v7a.zip" ;;
+            *) error "不支持的 Xray 架构: $ARCH" ;;
+        esac
+        wget -q --show-progress "https://github.com/XTLS/Xray-core/releases/latest/download/$XRAY_ASSET" -O /tmp/xray.zip && \
+        unzip -qo /tmp/xray.zip xray -d "$(dirname "$XRAY_BIN")" && \
+        chmod +x "$XRAY_BIN" && \
+        rm -f /tmp/xray.zip && \
+        info "Xray 订阅后端安装完成" || error "Xray 下载失败"
+    else
+        info "Xray 订阅后端已安装，跳过下载"
+    fi
+fi
 # 避免 Komari 内置 cloudflared 管理器启动第二份隧道
 rm -f /usr/local/bin/cloudflared /usr/bin/cloudflared
 
@@ -221,7 +284,30 @@ if [ ! -f "$CADDYFILE" ]; then
 EOF
 
 # 如果设置了 UUID，配置节点订阅反代
-if [ -n "$UUID" ]; then
+if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
+    cat > "$WORK_DIR/xray.json" << XRAY_EOF
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": $XRAY_VLESS_PORT,
+      "protocol": "vless",
+      "settings": { "clients": [{ "id": "$UUID" }], "decryption": "none" },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vls" } }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": $XRAY_VMESS_PORT,
+      "protocol": "vmess",
+      "settings": { "clients": [{ "id": "$UUID", "alterId": 0 }] },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vms" } }
+    }
+  ],
+  "outbounds": [{ "protocol": "freedom" }]
+}
+XRAY_EOF
+
     cat >> "$CADDYFILE" << 'EOF'
     # 订阅链接访问 (UUID 路径)
     handle /UUID_PLACEHOLDER {
@@ -230,6 +316,9 @@ if [ -n "$UUID" ]; then
             root /tmp
         }
     }
+
+    reverse_proxy /vls* 127.0.0.1:XRAY_VLESS_PORT_PLACEHOLDER
+    reverse_proxy /vms* 127.0.0.1:XRAY_VMESS_PORT_PLACEHOLDER
 
 EOF
     hint "检测到 UUID，配置订阅链接..."
@@ -240,6 +329,14 @@ EOF
 fi
 
 # 添加默认反代到 Komari 面板
+if truthy "$KOMARI_DISABLE_WEB_SSH" || truthy "$KOMARI_DISABLE_REMOTE"; then
+    cat >> "$CADDYFILE" << 'EOF'
+    @blockedRemote path_regexp blockedRemote ^/(api/clients/terminal|api/admin/client/[^/]+/terminal|api/admin/task/exec|terminal)(/.*)?$
+    respond @blockedRemote 403
+
+EOF
+fi
+
 cat >> "$CADDYFILE" << 'EOF'
     # 反代到 Komari 面板（默认路由）
     handle {
@@ -251,6 +348,8 @@ EOF
 # 替换占位符
 sed -i "s|CADDY_PROXY_PORT_PLACEHOLDER|$CADDY_PROXY_PORT|g" "$CADDYFILE"
 sed -i "s|UUID_PLACEHOLDER|$UUID|g" "$CADDYFILE"
+sed -i "s|XRAY_VLESS_PORT_PLACEHOLDER|$XRAY_VLESS_PORT|g" "$CADDYFILE"
+sed -i "s|XRAY_VMESS_PORT_PLACEHOLDER|$XRAY_VMESS_PORT|g" "$CADDYFILE"
 
 info "Caddyfile 已生成，准备启动 Caddy..."
 
@@ -259,11 +358,11 @@ else
 fi
 
 # 赋执行权给所有脚本和应用
-chmod +x $BACKUP_SCRIPT $SUB_LINK_SCRIPT $RESTORE_SCRIPT $RENEW_SCRIPT
+chmod +x "$BACKUP_SCRIPT" "$SUB_LINK_SCRIPT" "$RESTORE_SCRIPT" "$RENEW_SCRIPT"
 
 if [ "$BACKUP_ENABLED" = "1" ]; then
     hint "启动前检查远程备份..."
-    if . "$CRON_ENV_FILE" && KOMARI_RESTORE_SKIP_RESTART=1 "$RESTORE_SCRIPT" a; then
+    if . "$CRON_ENV_FILE" && KOMARI_RESTORE_SKIP_RESTART=1 bash "$RESTORE_SCRIPT" a; then
         info "启动前备份检查完成"
     else
         hint "启动前自动还原未完成，容器会继续启动，定时任务稍后重试。"
@@ -298,7 +397,7 @@ stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 
 [program:komari]
-command=/bin/sh -c 'unset KOMARI_CLOUDFLARED_TOKEN KOMARI_CLOUDFLARED_BIN GH_PAT; exec /app/komari server -l 0.0.0.0:25774'
+command=/bin/sh -c 'unset KOMARI_CLOUDFLARED_TOKEN KOMARI_CLOUDFLARED_BIN GH_PAT; exec /usr/local/bin/komari-start'
 autostart=true
 autorestart=true
 stderr_logfile=/dev/stderr
@@ -324,11 +423,53 @@ stderr_logfile_maxbytes=0
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 
+[program:xray]
+command=/bin/sh -c '[ -s /app/xray.json ] && exec /app/bin/xray run -config /app/xray.json || sleep infinity'
+autostart=XRAY_AUTOSTART_PLACEHOLDER
+autorestart=true
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+
 EOF
 
 # 替换占位符
+cat > /usr/local/bin/komari-start << KOMARI_START_EOF
+#!/usr/bin/env sh
+set -eu
+if [ -x /usr/local/bin/komari-disable-remote ]; then
+    /usr/local/bin/komari-disable-remote || true
+fi
+args="server -l ${KOMARI_LISTEN_ADDR}"
+if [ "${KOMARI_DISABLE_WEB_SSH}" = "1" ] || [ "${KOMARI_DISABLE_WEB_SSH}" = "true" ]; then
+    if /app/komari server --help 2>&1 | grep -q -- '--disable-web-ssh'; then
+        args="\$args --disable-web-ssh"
+    fi
+fi
+exec /app/komari \$args
+KOMARI_START_EOF
+chmod +x /usr/local/bin/komari-start
+
+if truthy "$KOMARI_DISABLE_WEB_SSH" || truthy "$KOMARI_DISABLE_REMOTE"; then
+    cat > /usr/local/bin/komari-disable-remote << 'DISABLE_REMOTE_EOF'
+#!/usr/bin/env sh
+db="${KOMARI_DB_FILE:-/app/data/komari.db}"
+[ -f "$db" ] || exit 0
+command -v sqlite3 >/dev/null 2>&1 || exit 0
+sqlite3 "$db" "INSERT INTO configs(key, value) VALUES ('terminal_enabled','false'),('web_ssh_enabled','false'),('remote_terminal_enabled','false'),('remote_execute_enabled','false'),('remote_command_enabled','false'),('command_execute_enabled','false'),('disable_web_ssh','true'),('disable_remote','true'),('disable_command_execute','true'),('disable_terminal','true') ON CONFLICT(key) DO UPDATE SET value=excluded.value;" >/dev/null 2>&1 || true
+sqlite3 "$db" "UPDATE configs SET terminal_enabled=0, web_ssh_enabled=0, remote_terminal_enabled=0, remote_execute_enabled=0, remote_command_enabled=0, command_execute_enabled=0 WHERE id IS NOT NULL;" >/dev/null 2>&1 || true
+DISABLE_REMOTE_EOF
+    chmod +x /usr/local/bin/komari-disable-remote
+fi
+
 sed -i "s|CADDYFILE_PLACEHOLDER|$CADDYFILE|g" "$SUPERVISOR_CONF"
 sed -i "s|CLOUDFLARED_CMD_PLACEHOLDER|$CLOUDFLARED_CMD|g" "$SUPERVISOR_CONF"
+if [ -n "${UUID:-}" ] && [ "$UUID" != "0" ]; then
+    sed -i "s|XRAY_AUTOSTART_PLACEHOLDER|true|g" "$SUPERVISOR_CONF"
+else
+    sed -i "s|XRAY_AUTOSTART_PLACEHOLDER|false|g" "$SUPERVISOR_CONF"
+fi
 
 fi
 

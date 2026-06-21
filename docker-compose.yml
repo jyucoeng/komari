@@ -1,6 +1,6 @@
 services:
   komari:
-    image: "${KOMARI_IMAGE:-ghcr.io/jyucoeng/komari:latest}"
+    image: "${KOMARI_IMAGE:-ghcr.io/hynize/komari:latest}"
     container_name: komari
     restart: unless-stopped
     ports:
@@ -32,6 +32,12 @@ services:
       # Caddy 反代配置（可选，Caddy 用于反代 Komari 和提供订阅服务）
       CADDY_PROXY_PORT: "${CADDY_PROXY_PORT:-8001}"
       CADDY_VERSION: "${CADDY_VERSION:-2.9.1}"
+      XRAY_VLESS_PORT: "${XRAY_VLESS_PORT:-8002}"
+      XRAY_VMESS_PORT: "${XRAY_VMESS_PORT:-8003}"
+
+      # Komari 远程功能开关（默认关闭 Web SSH/远程命令）
+      KOMARI_DISABLE_WEB_SSH: "${KOMARI_DISABLE_WEB_SSH:-1}"
+      KOMARI_DISABLE_REMOTE: "${KOMARI_DISABLE_REMOTE:-1}"
 
       # 节点订阅配置（只有设置 UUID 时才启用订阅功能）
       UUID: "${UUID:-}"

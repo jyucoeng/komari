@@ -4,6 +4,11 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      komari_version:
+        description: "Base ghcr.io/komari-monitor/komari tag; empty means latest"
+        required: false
+        default: ""
 
 jobs:
   build-and-push:
@@ -21,6 +26,7 @@ jobs:
           echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
           echo "SOURCE_REPOSITORY=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
           echo "SOURCE_BRANCH=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "KOMARI_VERSION=${{ github.event.inputs.komari_version || 'latest' }}" >> "$GITHUB_ENV"
 
       - name: 🏷️ Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -45,5 +51,6 @@ jobs:
           build-args: |
             KOMARI_SOURCE_REPOSITORY=${{ env.SOURCE_REPOSITORY }}
             KOMARI_SOURCE_BRANCH=${{ env.SOURCE_BRANCH }}
+            KOMARI_VERSION=${{ env.KOMARI_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -3,7 +3,7 @@
 #===============================================================
 #        Komari Dashboard Auto-Renew Scripts
 #
-# 此脚本用于自动更新 komari_bak.sh、restore.sh 和 sub_link.sh
+# 此脚本用于自动更新 backup.sh、restore.sh、sub_link.sh 和 repo.conf
 # ---------------------------------------------------------------
 # 功能:
 #   - 每天定时从 GitHub 获取最新的备份、还原和订阅脚本
@@ -16,7 +16,11 @@
 #---------------------------------------------------------------
 WORK_DIR="${WORK_DIR:-/app}"
 TEMP_DIR="/tmp/renew_scripts"
-SOURCE_REPOSITORY="${KOMARI_SOURCE_REPOSITORY:-jyucoeng/komari}"
+REPO_CONF="${REPO_CONF:-$WORK_DIR/repo.conf}"
+if [ -f "$REPO_CONF" ]; then
+    . "$REPO_CONF"
+fi
+SOURCE_REPOSITORY="${KOMARI_SOURCE_REPOSITORY:-${KOMARI_PROJECT_OWNER:-hynize}/${KOMARI_PROJECT_NAME:-komari}}"
 SOURCE_BRANCH="${KOMARI_SOURCE_BRANCH:-main}"
 
 #---------------------------------------------------------------
@@ -107,12 +111,17 @@ main() {
     local updated=0
 
     # 下载脚本
-    download_script "komari_bak.sh"
+    download_script "repo.conf"
+    download_script "backup.sh"
     download_script "restore.sh"
     download_script "sub_link.sh"
 
     # 更新脚本
-    if update_script "komari_bak.sh"; then
+    if update_script "repo.conf"; then
+        ((updated++))
+    fi
+
+    if update_script "backup.sh"; then
         ((updated++))
     fi
 

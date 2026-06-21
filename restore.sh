@@ -6,15 +6,17 @@
 # 此脚本用于自动检测和还原 Komari 面板备份数据。
 # ---------------------------------------------------------------
 # 功能:
-#   - 每分钟读取 GitHub 备份库中的 latest.json。
+#   - 每分钟读取 GitHub 备份库中的 latest.json 或 README.md。
 #   - 使用文件名 + sha256 比对，避免同名覆盖或坏包误判。
 #   - 下载、校验、解包到临时目录后再替换 data，避免还原失败时删库。
-#   - 支持手动指定备份文件还原。
+#   - 支持手动指定备份文件、不带参数选择备份文件、README.md 触发立即备份。
 #
 # 使用方法:
 #   - 自动还原（Supervisor/Cron 调用）: bash restore.sh a
 #   - 手动还原（指定文件）: bash restore.sh {filename}
 #   - 强制还原（忽略本地记录）: bash restore.sh f
+#   - 立即备份: bash restore.sh backup
+#   - 交互选择备份: bash restore.sh
 #===============================================================
 
 set -o pipefail
@@ -37,6 +39,8 @@ RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore
 RESTORE_LOG="${RESTORE_LOG:-/tmp/restore.log}"
 LOCK_DIR="${KOMARI_BACKUP_LOCK_DIR:-/tmp/komari-backup-restore.lock}"
 LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-3600}"
+BACKUP_SCRIPT="${BACKUP_SCRIPT:-${WORK_DIR}/backup.sh}"
+NO_ACTION_FLAG="${KOMARI_NO_ACTION_FLAG:-/tmp/komari-no-action}"
 
 #---------------------------------------------------------------
 # 脚本核心逻辑
@@ -172,7 +176,45 @@ contents_url() {
     printf 'https://api.github.com/repos/%s/%s/contents/%s?ref=%s\n' "$GH_BACKUP_USER" "$GH_REPO" "$path" "$GH_BACKUP_BRANCH"
 }
 
-read_latest_metadata() {
+read_backup_readme() {
+    api_get_raw "$(contents_url README.md)" 2>/dev/null || true
+}
+
+readme_command_or_file() {
+    read_backup_readme | sed '/^[[:space:]]*$/d' | head -n 1 | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+metadata_from_readme() {
+    local readme filename sha256 size
+    readme=$(read_backup_readme)
+    [ -n "$readme" ] || return 1
+    filename=$(printf "%s\n" "$readme" | grep -Eo 'komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz' | head -n 1)
+    sha256=$(printf "%s\n" "$readme" | grep -Eio '[a-f0-9]{64}' | head -n 1)
+    size=$(printf "%s\n" "$readme" | sed -n 's/.*Size:[^0-9]*\([0-9][0-9]*\).*/\1/ip' | head -n 1)
+    if valid_backup_filename "$filename"; then
+        printf '%s %s %s\n' "$filename" "${sha256:-unknown}" "${size:-0}"
+        return 0
+    fi
+    return 1
+}
+
+maybe_trigger_backup_from_readme() {
+    local command
+    command=$(readme_command_or_file)
+    if printf "%s" "$command" | grep -Eiq '^backup$|^backup[[:space:]]+now$|^now$|^立即备份$'; then
+        log "README.md 请求立即备份，开始执行 backup.sh"
+        mkdir -p /tmp 2>/dev/null || true
+        : > "${NO_ACTION_FLAG}.0" 2>/dev/null || true
+        if [ -x "$BACKUP_SCRIPT" ] || [ -f "$BACKUP_SCRIPT" ]; then
+            bash "$BACKUP_SCRIPT" bak
+        else
+            error "README.md 请求备份，但找不到备份脚本: $BACKUP_SCRIPT"
+        fi
+        exit 0
+    fi
+}
+
+read_index_metadata() {
     local metadata filename sha256 size
     if metadata=$(api_get_raw "$(contents_url latest.json)" 2>/dev/null); then
         filename=$(printf "%s" "$metadata" | json_value filename)
@@ -182,10 +224,16 @@ read_latest_metadata() {
             printf '%s %s %s\n' "$filename" "$sha256" "$size"
             return 0
         fi
-        log "latest.json 存在但格式无效，拒绝自动还原。"
-        return 1
+        log "latest.json 存在但格式无效，尝试读取 README.md。"
     fi
 
+    metadata_from_readme
+}
+
+read_latest_metadata() {
+    if read_index_metadata; then
+        return 0
+    fi
     get_latest_backup_from_listing
 }
 
@@ -202,15 +250,15 @@ get_latest_backup_from_listing() {
         return 0
     fi
 
-    file_meta=$(get_file_metadata "$filename") || return 0
+    file_meta=$(get_file_metadata_direct "$filename") || return 0
     sha256=$(printf "%s" "$file_meta" | awk '{print $2}')
     size=$(printf "%s" "$file_meta" | awk '{print $3}')
     printf '%s %s %s\n' "$filename" "$sha256" "$size"
 }
 
-get_file_metadata() {
+get_file_metadata_direct() {
     local filename="$1"
-    local metadata api_sha api_size
+    local metadata api_size
 
     valid_backup_filename "$filename" || error "备份文件名非法: $filename"
 
@@ -219,12 +267,30 @@ get_file_metadata() {
         return 1
     fi
 
-    api_sha=$(printf "%s" "$metadata" | json_value sha)
     api_size=$(printf "%s" "$metadata" | json_value size)
     valid_size "$api_size" || return 1
 
     # GitHub contents API 的 sha 是 blob sha，不是文件 sha256。sha256 会在下载后计算。
-    printf '%s %s %s\n' "$filename" "${api_sha:-unknown}" "$api_size"
+    printf '%s %s %s\n' "$filename" "unknown" "$api_size"
+}
+
+get_file_metadata() {
+    local filename="$1"
+    local latest_state latest_file latest_sha256 latest_size
+
+    valid_backup_filename "$filename" || error "备份文件名非法: $filename"
+
+    if latest_state=$(read_index_metadata 2>/dev/null); then
+        latest_file=$(printf "%s" "$latest_state" | awk '{print $1}')
+        latest_sha256=$(printf "%s" "$latest_state" | awk '{print $2}')
+        latest_size=$(printf "%s" "$latest_state" | awk '{print $3}')
+        if [ "$filename" = "$latest_file" ]; then
+            printf '%s %s %s\n' "$filename" "${latest_sha256:-unknown}" "${latest_size:-0}"
+            return 0
+        fi
+    fi
+
+    get_file_metadata_direct "$filename"
 }
 
 get_last_restore_state() {
@@ -272,7 +338,7 @@ verify_download() {
 
     [ -s "$archive" ] || error "下载的备份文件为空。"
     actual_size=$(wc -c < "$archive" | tr -d ' ')
-    if valid_size "$expected_size" && [ "$actual_size" != "$expected_size" ]; then
+    if valid_size "$expected_size" && [ "$expected_size" != "0" ] && [ "$actual_size" != "$expected_size" ]; then
         error "备份文件大小不匹配，拒绝还原。期望 $expected_size，实际 $actual_size。"
     fi
 
@@ -404,6 +470,7 @@ auto_restore() {
     local latest_state latest_file latest_sha256 latest_size last_state last_file last_sha256 is_new_backup
 
     check_env
+    maybe_trigger_backup_from_readme
     acquire_lock
 
     if ! latest_state=$(read_latest_metadata); then
@@ -449,8 +516,10 @@ manual_restore() {
     local file_state file_size latest_state latest_file latest_sha256 latest_size expected_sha256 expected_size
 
     if [ -z "$backup_file" ]; then
-        error "请指定备份文件名: $0 {filename}"
+        select_backup_file
+        return
     fi
+    backup_file=$(basename "$backup_file")
 
     check_env
     acquire_lock
@@ -459,7 +528,7 @@ manual_restore() {
     file_size=$(printf "%s" "$file_state" | awk '{print $3}')
     expected_sha256=""
     expected_size="$file_size"
-    if latest_state=$(read_latest_metadata 2>/dev/null); then
+    if latest_state=$(read_index_metadata 2>/dev/null); then
         latest_file=$(printf "%s" "$latest_state" | awk '{print $1}')
         latest_sha256=$(printf "%s" "$latest_state" | awk '{print $2}')
         latest_size=$(printf "%s" "$latest_state" | awk '{print $3}')
@@ -471,10 +540,37 @@ manual_restore() {
     do_restore "$backup_file" "$expected_sha256" "$expected_size"
 }
 
+list_backup_files() {
+    local contents
+    contents=$(api_get "$(contents_url '')" 2>/dev/null || true)
+    if command -v jq >/dev/null 2>&1; then
+        printf "%s" "$contents" | jq -r '.[].name // empty' 2>/dev/null | grep -E '^komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz$' | sort -r
+    else
+        printf "%s" "$contents" | grep -oE 'komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz' | sort -r | uniq
+    fi
+}
+
+select_backup_file() {
+    local files count choice selected
+    check_env
+    files=$(list_backup_files)
+    count=$(printf "%s\n" "$files" | sed '/^$/d' | wc -l | tr -d ' ')
+    [ "$count" -gt 0 ] || error "备份仓库中没有找到 komari-*.tar.gz"
+    printf "%s\n" "$files" | awk '{printf "%d. %s\n", NR, $0}'
+    printf "请选择要还原的备份文件 [1-%s]: " "$count"
+    read -r choice
+    if ! printf "%s" "$choice" | grep -Eq '^[0-9]+$' || [ "$choice" -lt 1 ] || [ "$choice" -gt "$count" ]; then
+        error "选择无效。"
+    fi
+    selected=$(printf "%s\n" "$files" | sed -n "${choice}p")
+    manual_restore "$selected"
+}
+
 force_restore() {
     local latest_state latest_file latest_sha256 latest_size
 
     check_env
+    maybe_trigger_backup_from_readme
     acquire_lock
 
     if ! latest_state=$(read_latest_metadata); then
@@ -500,6 +596,14 @@ case "${1:-}" in
         require_command sha256sum
         auto_restore
         ;;
+    bak|backup|now)
+        check_env
+        if [ -x "$BACKUP_SCRIPT" ] || [ -f "$BACKUP_SCRIPT" ]; then
+            bash "$BACKUP_SCRIPT" bak
+        else
+            error "找不到备份脚本: $BACKUP_SCRIPT"
+        fi
+        ;;
     f)
         require_command curl
         require_command tar
@@ -507,15 +611,10 @@ case "${1:-}" in
         force_restore
         ;;
     "")
-        echo "使用方法:"
-        echo "  $0 a              - 自动还原模式（Supervisor/Cron 每分钟调用）"
-        echo "  $0 f              - 强制还原最新备份"
-        echo "  $0 {filename}     - 手动还原指定备份文件"
-        echo ""
-        echo "示例:"
-        echo "  $0 a                                              # 自动检测新备份并还原"
-        echo "  $0 komari-2024-01-01-120000.tar.gz              # 还原指定文件"
-        exit 1
+        require_command curl
+        require_command tar
+        require_command sha256sum
+        select_backup_file
         ;;
     *)
         require_command curl

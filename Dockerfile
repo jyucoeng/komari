@@ -1,14 +1,17 @@
-FROM ghcr.io/komari-monitor/komari:latest
+ARG KOMARI_VERSION=latest
+FROM ghcr.io/komari-monitor/komari:${KOMARI_VERSION:-latest}
+ARG KOMARI_VERSION=latest
 
-ARG KOMARI_SOURCE_REPOSITORY="jyucoeng/komari"
+ARG KOMARI_SOURCE_REPOSITORY="hynize/komari"
 ARG KOMARI_SOURCE_BRANCH="main"
 ARG CADDY_VERSION="2.9.1"
 ARG TARGETARCH
 ARG TARGETVARIANT
 ENV KOMARI_SOURCE_REPOSITORY="$KOMARI_SOURCE_REPOSITORY" \
-    KOMARI_SOURCE_BRANCH="$KOMARI_SOURCE_BRANCH"
+    KOMARI_SOURCE_BRANCH="$KOMARI_SOURCE_BRANCH" \
+    KOMARI_VERSION="${KOMARI_VERSION:-latest}"
 
-RUN apk add --no-cache bash curl wget git sqlite jq tar supervisor coreutils
+RUN apk add --no-cache bash curl wget git sqlite jq tar supervisor coreutils unzip
 
 RUN set -eux; \
     case "${TARGETARCH:-$(apk --print-arch)}${TARGETVARIANT:-}" in \
@@ -28,8 +31,10 @@ RUN set -eux; \
 COPY entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-COPY komari_bak.sh /app/komari_bak.sh
-RUN chmod +x /app/komari_bak.sh
+COPY repo.conf /app/repo.conf
+
+COPY backup.sh /app/backup.sh
+RUN chmod +x /app/backup.sh
 
 COPY restore.sh /app/restore.sh
 RUN chmod +x /app/restore.sh
