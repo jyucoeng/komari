@@ -113,23 +113,75 @@ Caddy (:8001)
 
 ## 备份和还原
 
+### 备份私库准备
+
+先在 GitHub 创建一个私有仓库，专门保存 Komari 备份文件。容器启动时需要配置下面这些变量，变量完整时才会启用自动备份和自动还原：
+
+```bash
+-e GH_BACKUP_USER="你的 GitHub 用户名" \
+-e GH_REPO="你的备份私库名" \
+-e GH_BACKUP_BRANCH="main" \
+-e GH_PAT="你的 GitHub PAT" \
+-e GH_EMAIL="你的 Git 提交邮箱"
+```
+
+`GH_PAT` 需要能读写这个备份私库。建议只给备份私库授权，不要把公开源码仓库和备份仓库混用。
+
+备份仓库中会生成这些文件：
+
+- `komari-YYYY-MM-DD-HHMMSS.tar.gz` - 实际数据包，内容是 `/app/data`
+- `latest.json` - 最新备份索引，记录文件名、大小、sha256 和创建时间
+- `README.md` - 人可读的最新备份摘要，也可以用来触发立即备份
+
 ### 自动备份
 
-`backup.sh` 会把 `/app/data` 做一致性快照，打包为 `komari-YYYY-MM-DD-HHMMSS.tar.gz` 上传到备份私库，并维护：
+`BACKUP_TIME` 控制定时备份，格式是 5 段 cron 表达式。默认每天执行一次：
 
-- `latest.json` - 机器读取的最新备份索引，包含文件名、大小、sha256 和创建时间
-- `README.md` - 给人看的最新备份摘要，也可作为恢复索引
-- `komari-*.tar.gz` - 实际备份包
+```bash
+-e BACKUP_TIME="0 20 * * *"
+```
 
-Cron 会按 `BACKUP_TIME` 执行：
+常用例子：
+
+```bash
+# 每小时一次
+-e BACKUP_TIME="0 */1 * * *"
+
+# 每 10 分钟一次
+-e BACKUP_TIME="*/10 * * * *"
+```
+
+保留天数由 `BACKUP_DAYS` 控制，默认保留 10 天。备份和还原共用一把锁，正在运行的任务会跳过下一轮，异常遗留锁默认 60 秒后清理。
+
+查看自动备份日志：
+
+```bash
+docker exec komari tail -n 100 /tmp/backup.log
+```
+
+### 立即备份
+
+容器运行后，可以手动立刻备份一次：
+
+```bash
+docker exec komari /app/backup.sh
+```
+
+下面这些写法等价，保留是为了兼容不同模板习惯：
 
 ```bash
 docker exec komari /app/backup.sh bak
+docker exec komari /app/backup.sh backup
+docker exec komari /app/backup.sh now
+docker exec komari /app/backup.sh a
+docker exec komari /app/restore.sh backup
 ```
+
+备份成功后，私库会出现新的 `komari-*.tar.gz`，并同步更新 `latest.json` 和 `README.md`。
 
 ### README 触发立即备份
 
-把备份私库 `README.md` 第一行改为以下任意一种，下一次自动还原检查会立即执行备份：
+也可以直接在备份私库的 `README.md` 第一行写入以下任意一种内容：
 
 ```text
 backup
@@ -138,32 +190,58 @@ now
 立即备份
 ```
 
+容器每分钟运行的自动检查会识别这个指令，然后执行一次立即备份。备份完成后，脚本会把 `README.md` 改回最新备份摘要。
+
 ### 自动还原
 
-容器每分钟执行 `restore.sh a`。它会优先读取 `latest.json`，如果缺失或格式无效，再从备份私库 `README.md` 解析最新备份文件，最后才回退到文件列表。
-
-自动还原会比较本地记录与远程文件名/sha256，只有远程出现新备份时才恢复。
-
-### 手动操作
+容器启动时会先检查远程备份，之后每分钟执行一次：
 
 ```bash
-# 立即备份
-docker exec komari /app/backup.sh
+docker exec komari /app/restore.sh a
+```
 
-# 也可通过 restore.sh 触发备份
-docker exec komari /app/restore.sh backup
+自动还原读取顺序是：
 
-# 不带参数列出备份文件并选择还原
-docker exec -it komari /app/restore.sh
+1. 优先读取 `latest.json`
+2. `latest.json` 不可用时读取备份私库 `README.md`
+3. 最后回退到备份仓库文件列表里的最新 `komari-*.tar.gz`
 
-# 手动还原指定备份文件
-docker exec komari /app/restore.sh komari-2024-01-01-120000.tar.gz
+脚本会比较本地记录和远程备份的文件名、sha256。只有远程出现新的备份时，才会下载并还原。还原成功后会尝试重启 Komari 进程让数据生效。
 
-# 强制还原 latest.json/README.md 指向的最新备份
+查看自动还原日志：
+
+```bash
+docker exec komari tail -n 100 /tmp/restore-cron.log
+docker exec komari tail -n 100 /tmp/restore.log
+```
+
+### 手动还原
+
+强制还原 `latest.json` 或 `README.md` 指向的最新备份：
+
+```bash
 docker exec komari /app/restore.sh f
 ```
 
-还原流程会先下载到临时文件，校验大小、sha256、tar 完整性和包内路径，确认只包含 `data/` 下的普通文件/目录后才替换现有数据目录。替换失败会尝试回滚旧数据。
+列出备份文件并交互选择一个版本还原：
+
+```bash
+docker exec -it komari /app/restore.sh
+```
+
+指定某个备份文件还原：
+
+```bash
+docker exec komari /app/restore.sh komari-2024-01-01-120000.tar.gz
+```
+
+还原时脚本会先下载到临时文件，校验大小、sha256、tar 完整性和包内路径，确认只包含 `data/` 下的普通文件/目录后才替换现有数据目录。替换失败会尝试回滚旧数据。
+
+如果还原成功但面板没有立刻刷新，可以手动重启容器：
+
+```bash
+docker restart komari
+```
 
 ## 脚本自动更新
 
