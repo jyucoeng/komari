@@ -15,7 +15,6 @@
 #   - 自动还原（Supervisor/Cron 调用）: bash restore.sh a
 #   - 手动还原（指定文件）: bash restore.sh {filename}
 #   - 强制还原（忽略本地记录）: bash restore.sh f
-#   - 立即备份: bash restore.sh backup
 #   - 交互选择备份: bash restore.sh
 #===============================================================
 
@@ -244,7 +243,7 @@ maybe_trigger_backup_from_readme() {
         mkdir -p /tmp 2>/dev/null || true
         : > "${NO_ACTION_FLAG}.0" 2>/dev/null || true
         if [ -x "$BACKUP_SCRIPT" ] || [ -f "$BACKUP_SCRIPT" ]; then
-            bash "$BACKUP_SCRIPT" bak
+            bash "$BACKUP_SCRIPT"
         else
             error "README.md 请求备份，但找不到备份脚本: $BACKUP_SCRIPT"
         fi
@@ -637,7 +636,7 @@ case "${1:-}" in
     bak|backup|now)
         check_env
         if [ -x "$BACKUP_SCRIPT" ] || [ -f "$BACKUP_SCRIPT" ]; then
-            bash "$BACKUP_SCRIPT" bak
+            bash "$BACKUP_SCRIPT"
         else
             error "找不到备份脚本: $BACKUP_SCRIPT"
         fi

@@ -11,8 +11,7 @@
 #   - 备份成功后记录本机已同步状态，避免自动还原重复覆盖自己。
 #
 # 使用方法:
-#   - 备份 (由 Cron 自动调用): bash backup.sh bak
-#   - 立即备份: bash backup.sh 或 bash backup.sh bak
+#   - 立即备份: bash backup.sh
 #===============================================================
 
 set -o pipefail
@@ -384,8 +383,6 @@ case "${1:-}" in
     *)
         echo "使用方法:"
         echo "  $0       - 立即执行备份"
-        echo "  $0 bak   - 执行备份 (Cron 自动调用)"
-        echo "  $0 a     - 兼容旧模板的立即备份入口"
         echo ""
         echo "注意：还原功能请使用 restore.sh"
         exit 1

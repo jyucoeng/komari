@@ -167,14 +167,10 @@ docker exec komari tail -n 100 /tmp/backup.log
 docker exec komari /app/backup.sh
 ```
 
-下面这些写法等价，保留是为了兼容不同模板习惯：
+如果是在容器内部执行，使用：
 
 ```bash
-docker exec komari /app/backup.sh bak
-docker exec komari /app/backup.sh backup
-docker exec komari /app/backup.sh now
-docker exec komari /app/backup.sh a
-docker exec komari /app/restore.sh backup
+bash /app/backup.sh
 ```
 
 备份成功后，私库会出现新的 `komari-*.tar.gz`，并同步更新 `latest.json` 和 `README.md`。

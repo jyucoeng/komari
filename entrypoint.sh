@@ -161,7 +161,7 @@ mkdir -p "$CRONTAB_DIR"
 # 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
 : > "$CRONTAB_FILE"
 if [ "$BACKUP_ENABLED" = "1" ]; then
-    append_cron_job "$BACKUP_TIME" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$BACKUP_SCRIPT") bak >> /tmp/backup.log 2>&1"
+    append_cron_job "$BACKUP_TIME" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$BACKUP_SCRIPT") >> /tmp/backup.log 2>&1"
     # 添加自动还原任务（每分钟检测一次）
     append_cron_job "* * * * *" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$RESTORE_SCRIPT") a >> /tmp/restore-cron.log 2>&1"
 fi
