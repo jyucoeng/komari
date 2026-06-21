@@ -13,13 +13,13 @@
 # 工作流程：
 #   1. 客户端 -> CF_IP:443
 #   2. Cloudflare 隧道识别 SNI 和 Host 为 ARGO_DOMAIN
-#   3. 隧道将流量转发到容器内 Caddy:8001
-#   4. Caddy 反代到 Komari 面板 或 订阅文件
+#   3. 隧道将流量转发到容器内 Caddy
+#   4. Caddy 反代到 Komari 面板、订阅文件或 Xray WS 后端
 #
 # 环境变量说明：
 #   - ARGO_DOMAIN: Cloudflare 隧道配置的域名（必需）
 #   - UUID: 订阅 UUID（必需）
-#   - CF_IP: Cloudflare 等 CDN 的优选 IP 或域名（必需，不会默认使用 ARGO_DOMAIN）
+#   - CF_IP: Cloudflare 等 CDN 的优选 IP 或域名（默认 ip.sb）
 #   - CADDY_PROXY_PORT: Caddy 反向代理的内部端口（用于内部通信）
 #===============================================================
 
@@ -59,7 +59,7 @@ valid_endpoint() {
 
 UUID="${UUID:-}"
 ARGO_DOMAIN="${ARGO_DOMAIN:-}"
-CF_IP="${CF_IP:-}"
+CF_IP="${CF_IP:-ip.sb}"
 SUB_NAME="${SUB_NAME:-komari}"
 OUTPUT_FILE="${OUTPUT_FILE:-/tmp/list.log}"
 CADDY_PROXY_PORT="${CADDY_PROXY_PORT:-8001}"
@@ -80,10 +80,6 @@ if ! valid_endpoint "$ARGO_DOMAIN"; then
     error "ARGO_DOMAIN 格式不正确，无法生成订阅链接"
 fi
 
-if [ -z "$CF_IP" ]; then
-    hint "CF_IP 未设置，跳过生成订阅链接。请设置 Cloudflare 优选 IP 或可用入口域名。"
-    exit 0
-fi
 if ! valid_endpoint "$CF_IP"; then
     error "CF_IP 格式不正确，无法生成订阅链接"
 fi

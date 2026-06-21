@@ -61,7 +61,7 @@ docker run -d \
 
 - `BACKUP_TIME` - 5 段 cron 表达式，默认 `0 20 * * *`。例如每小时一次：`0 */1 * * *`
 - `BACKUP_DAYS` - 备份保留天数，默认 `10`
-- `KOMARI_LOCK_TIMEOUT_SECONDS` - 备份/还原任务锁超时时间，默认 `3600` 秒
+- `KOMARI_LOCK_TIMEOUT_SECONDS` - 备份/还原任务锁超时时间，默认 `300` 秒。备份频率如果小到分钟级，可按实际打包耗时继续调低或调高
 - `NO_AUTO_RENEW` - 设置为 `1` 时禁用每日脚本自动更新
 
 ### 版本和脚本来源
@@ -77,7 +77,7 @@ GitHub Actions 手动触发时可以填写 `komari_version` 来构建指定上�
 - `CADDY_PROXY_PORT` - Caddy 监听端口，默认 `8001`
 - `CADDY_VERSION` - Caddy 版本，默认 `2.9.1`
 - `UUID` - 订阅 UUID；为空或 `0` 时不启用订阅
-- `CF_IP` - CDN 优选 IP 或可用入口域名；为空时跳过订阅生成，不会默认使用 `ARGO_DOMAIN`
+- `CF_IP` - CDN 优选 IP 或可用入口域名，默认 `ip.sb`，不会默认使用 `ARGO_DOMAIN`
 - `SUB_NAME` - 订阅名称，默认 `komari`
 - `XRAY_VLESS_PORT` - 容器内 VLESS WebSocket 后端端口，默认 `8002`
 - `XRAY_VMESS_PORT` - 容器内 VMESS WebSocket 后端端口，默认 `8003`

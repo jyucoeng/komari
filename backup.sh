@@ -32,7 +32,7 @@ GH_EMAIL="${GH_EMAIL:-your_github_email@example.com}"
 BACKUP_DAYS="${BACKUP_DAYS:-10}"
 RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore}}"
 LOCK_DIR="${KOMARI_BACKUP_LOCK_DIR:-/tmp/komari-backup-restore.lock}"
-LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-3600}"
+LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-300}"
 
 #---------------------------------------------------------------
 # 面板工作目录配置 (默认与 Dockerfile 中 Komari 的工作路径保持一致)
