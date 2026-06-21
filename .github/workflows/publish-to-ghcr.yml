@@ -24,8 +24,6 @@ jobs:
       - name: 🧭 Set image metadata
         run: |
           echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-          echo "SOURCE_REPOSITORY=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
-          echo "SOURCE_BRANCH=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
           echo "KOMARI_VERSION=${{ github.event.inputs.komari_version || 'latest' }}" >> "$GITHUB_ENV"
 
       - name: 🏷️ Set up QEMU
@@ -49,8 +47,6 @@ jobs:
           push: true
           tags: ${{ env.IMAGE_NAME }}:latest
           build-args: |
-            KOMARI_SOURCE_REPOSITORY=${{ env.SOURCE_REPOSITORY }}
-            KOMARI_SOURCE_BRANCH=${{ env.SOURCE_BRANCH }}
             KOMARI_VERSION=${{ env.KOMARI_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

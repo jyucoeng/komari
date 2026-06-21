@@ -20,8 +20,18 @@ REPO_CONF="${REPO_CONF:-$WORK_DIR/repo.conf}"
 if [ -f "$REPO_CONF" ]; then
     . "$REPO_CONF"
 fi
-SOURCE_REPOSITORY="${KOMARI_SOURCE_REPOSITORY:-${KOMARI_PROJECT_OWNER:-hynize}/${KOMARI_PROJECT_NAME:-komari}}"
+if [ -n "${KOMARI_SOURCE_REPOSITORY:-}" ]; then
+    SOURCE_REPOSITORY="$KOMARI_SOURCE_REPOSITORY"
+elif [ -n "${KOMARI_PROJECT_OWNER:-}" ] && [ -n "${KOMARI_PROJECT_NAME:-}" ]; then
+    SOURCE_REPOSITORY="$KOMARI_PROJECT_OWNER/$KOMARI_PROJECT_NAME"
+else
+    SOURCE_REPOSITORY=""
+fi
 SOURCE_BRANCH="${KOMARI_SOURCE_BRANCH:-main}"
+if [ -z "$SOURCE_REPOSITORY" ]; then
+    echo "错误：未配置 KOMARI_SOURCE_REPOSITORY，请检查 $REPO_CONF" >&2
+    exit 1
+fi
 
 #---------------------------------------------------------------
 # 脚本核心逻辑

@@ -32,7 +32,7 @@ GH_EMAIL="${GH_EMAIL:-your_github_email@example.com}"
 BACKUP_DAYS="${BACKUP_DAYS:-10}"
 RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore}}"
 LOCK_DIR="${KOMARI_BACKUP_LOCK_DIR:-/tmp/komari-backup-restore.lock}"
-LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-300}"
+LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
 
 #---------------------------------------------------------------
 # 面板工作目录配置 (默认与 Dockerfile 中 Komari 的工作路径保持一致)
@@ -107,11 +107,48 @@ lock_mtime() {
     fi
 }
 
+lock_owner_pid() {
+    [ -f "$LOCK_DIR/owner" ] || return 1
+    sed -n 's/^pid=//p' "$LOCK_DIR/owner" 2>/dev/null | sed -n '1p'
+}
+
+lock_owner_alive() {
+    local pid cmd
+    pid=$(lock_owner_pid || true)
+    if ! printf "%s" "$pid" | grep -Eq '^[0-9]+$'; then
+        return 1
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+        return 1
+    fi
+    if [ -r "/proc/$pid/cmdline" ]; then
+        cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+        case "$cmd" in
+            *backup.sh*|*restore.sh*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    return 0
+}
+
+write_lock_owner() {
+    {
+        printf 'pid=%s\n' "$$"
+        printf 'script=%s\n' "$(basename "$0")"
+        printf 'created_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    } > "$LOCK_DIR/owner" 2>/dev/null || true
+}
+
 acquire_lock() {
+    local now mtime
     if [ -d "$LOCK_DIR" ]; then
+        if lock_owner_alive; then
+            hint "已有备份或还原任务正在运行，本次备份跳过。"
+            exit 0
+        fi
         now=$(date +%s)
         mtime=$(lock_mtime)
-        if [ -n "$mtime" ] && [ "$mtime" -gt 0 ] && [ $((now - mtime)) -gt "$LOCK_TIMEOUT_SECONDS" ]; then
+        if [ -z "$mtime" ] || [ "$mtime" -le 0 ] || [ $((now - mtime)) -ge "$LOCK_TIMEOUT_SECONDS" ]; then
             hint "检测到过期任务锁，正在清理。"
             rm -rf "$LOCK_DIR"
         fi
@@ -119,6 +156,7 @@ acquire_lock() {
 
     if mkdir "$LOCK_DIR" 2>/dev/null; then
         LOCK_ACQUIRED="1"
+        write_lock_owner
     else
         hint "已有备份或还原任务正在运行，本次备份跳过。"
         exit 0

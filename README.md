@@ -7,7 +7,7 @@
 - 源码仓库默认值集中在 `repo.conf`，普通 fork 只改这个文件即可。
 - GitHub Actions 会自动发布到当前仓库对应的 GHCR 地址：`ghcr.io/<owner>/<repo>:latest`。
 - Docker Compose 复制 `.env.example` 为 `.env` 后，集中修改镜像、备份仓库、隧道域名、密码和订阅配置。
-- 自动更新脚本会从 `repo.conf` 或镜像构建时写入的 `KOMARI_SOURCE_REPOSITORY`、`KOMARI_SOURCE_BRANCH` 拉取脚本。
+- 自动更新脚本默认从 `repo.conf` 中的 `KOMARI_SOURCE_REPOSITORY`、`KOMARI_SOURCE_BRANCH` 拉取脚本；部署时仍可用同名环境变量临时覆盖。
 
 ## 快速开始
 
@@ -61,14 +61,14 @@ docker run -d \
 
 - `BACKUP_TIME` - 5 段 cron 表达式，默认 `0 20 * * *`。例如每小时一次：`0 */1 * * *`
 - `BACKUP_DAYS` - 备份保留天数，默认 `10`
-- `KOMARI_LOCK_TIMEOUT_SECONDS` - 备份/还原任务锁超时时间，默认 `300` 秒。备份频率如果小到分钟级，可按实际打包耗时继续调低或调高
+- `KOMARI_LOCK_TIMEOUT_SECONDS` - 备份/还原任务僵死锁清理时间，默认 `60` 秒。正在运行的任务会按 PID 识别并跳过，不会被这个超时误清理
 - `NO_AUTO_RENEW` - 设置为 `1` 时禁用每日脚本自动更新
 
 ### 版本和脚本来源
 
 - `KOMARI_VERSION` - 构建镜像时使用的上游 Komari 镜像 tag；为空或未指定时使用 `latest`
-- `KOMARI_SOURCE_REPOSITORY` - 自动更新脚本来源仓库，默认来自 `repo.conf` 或构建参数
-- `KOMARI_SOURCE_BRANCH` - 自动更新脚本来源分支，默认 `main`
+- `KOMARI_SOURCE_REPOSITORY` - 自动更新脚本来源仓库，默认来自 `repo.conf`
+- `KOMARI_SOURCE_BRANCH` - 自动更新脚本来源分支，默认来自 `repo.conf`
 
 GitHub Actions 手动触发时可以填写 `komari_version` 来构建指定上游版本；push 构建默认使用 `latest`。
 
