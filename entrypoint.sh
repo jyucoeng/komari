@@ -338,6 +338,16 @@ EOF
 fi
 
 cat >> "$CADDYFILE" << 'EOF'
+    # 绕过前端 EULA 弹窗 Bug（未登录时 /api/admin/settings 返回 401 导致前端误判弹窗）
+    @unauthEula {
+        path /api/admin/settings /api/admin/settings/
+        not header Cookie *session_token=*
+    }
+    handle @unauthEula {
+        header Content-Type application/json
+        respond `{"status":"success","data":{"eula_accepted":true}}` 200
+    }
+
     # 反代到 Komari 面板（默认路由）
     handle {
         reverse_proxy localhost:25774
