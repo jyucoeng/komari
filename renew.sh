@@ -105,11 +105,13 @@ download_file() {
 download_script() {
     local script_name="$1"
     local output_path="$TEMP_DIR/$script_name"
-    local url="https://raw.githubusercontent.com/$SOURCE_REPOSITORY/$SOURCE_BRANCH/$script_name"
+    local cache_bust url
+    cache_bust="${RENEW_CACHE_BUST:-$(date -u +%Y%m%d%H%M%S)}"
+    url="https://raw.githubusercontent.com/$SOURCE_REPOSITORY/$SOURCE_BRANCH/$script_name?ts=$cache_bust"
 
     hint "正在下载 $script_name..."
     log "Downloading $script_name"
-    log "下载 $script_name <- $SOURCE_REPOSITORY/$SOURCE_BRANCH"
+    log "下载 $script_name <- $SOURCE_REPOSITORY/$SOURCE_BRANCH (cache_bust=$cache_bust)"
 
     if ! download_file "$url" "$output_path" 2>/dev/null; then
         error "下载 $script_name 失败: $url"
