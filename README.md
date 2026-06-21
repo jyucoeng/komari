@@ -87,6 +87,7 @@ docker run -d \
 - `BACKUP_TIME` - 5 段 cron 表达式，默认 `0 20 * * *`。例如每小时一次：`0 */1 * * *`
 - `BACKUP_DAYS` - 备份保留天数，默认 `10`
 - `KOMARI_LOCK_TIMEOUT_SECONDS` - 备份/还原任务僵死锁清理时间，默认 `60` 秒。正在运行的任务会按 PID 识别并跳过，不会被这个超时误清理
+- `KOMARI_RESTORE_PRESERVE_EULA` - 默认 `1`，还原前当前实例已接受法律声明时，会在还原后保留该状态，避免旧备份导致声明重复弹出
 - `NO_AUTO_RENEW` - 设置为 `1` 时禁用每日脚本自动更新
 
 ### 版本和脚本来源

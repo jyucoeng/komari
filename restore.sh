@@ -377,6 +377,81 @@ save_restore_state() {
     printf '%s %s\n' "$backup_file" "$backup_sha256" > "$RESTORE_STATE_FILE"
 }
 
+sqlite_command() {
+    command -v sqlite3 2>/dev/null || command -v sqlite 2>/dev/null || true
+}
+
+truthy_config_value() {
+    local value
+    value=$(printf "%s" "$1" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//' | tr '[:upper:]' '[:lower:]')
+    case "$value" in
+        true|1|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sqlite_has_column() {
+    local db_file="$1" table_name="$2" column_name="$3" sqlite_bin
+    sqlite_bin=$(sqlite_command)
+    [ -n "$sqlite_bin" ] || return 1
+    "$sqlite_bin" "$db_file" "PRAGMA table_info($table_name);" 2>/dev/null | \
+        awk -F'|' -v column="$column_name" 'tolower($2) == tolower(column) { found=1 } END { exit found ? 0 : 1 }'
+}
+
+current_eula_accepted_state() {
+    local db_file sqlite_bin value
+    if [ "${KOMARI_RESTORE_PRESERVE_EULA:-1}" = "0" ]; then
+        printf '0\n'
+        return 0
+    fi
+
+    db_file="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
+    [ -f "$db_file" ] || { printf '0\n'; return 0; }
+    sqlite_bin=$(sqlite_command)
+    [ -n "$sqlite_bin" ] || { printf '0\n'; return 0; }
+
+    if sqlite_has_column "$db_file" "configs" "key" && sqlite_has_column "$db_file" "configs" "value"; then
+        value=$("$sqlite_bin" "$db_file" "SELECT value FROM configs WHERE key='eula_accepted' LIMIT 1;" 2>/dev/null | head -n 1)
+    elif sqlite_has_column "$db_file" "configs" "eula_accepted"; then
+        value=$("$sqlite_bin" "$db_file" "SELECT eula_accepted FROM configs ORDER BY id DESC LIMIT 1;" 2>/dev/null | head -n 1)
+    else
+        printf '0\n'
+        return 0
+    fi
+
+    if truthy_config_value "$value"; then
+        printf '1\n'
+    else
+        printf '0\n'
+    fi
+}
+
+preserve_eula_accepted_after_restore() {
+    local should_preserve="$1" db_file sqlite_bin
+    [ "$should_preserve" = "1" ] || return 0
+
+    db_file="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
+    [ -f "$db_file" ] || { log "还原后未找到 Komari 数据库，跳过 EULA 接受状态保留。"; return 0; }
+    sqlite_bin=$(sqlite_command)
+    [ -n "$sqlite_bin" ] || { log "未找到 sqlite 命令，跳过 EULA 接受状态保留。"; return 0; }
+
+    if sqlite_has_column "$db_file" "configs" "key" && sqlite_has_column "$db_file" "configs" "value"; then
+        if "$sqlite_bin" "$db_file" "INSERT OR REPLACE INTO configs(key, value) VALUES ('eula_accepted', 'true');" >/dev/null 2>&1; then
+            log "已保留当前实例的 EULA 接受状态，避免还原旧备份后重复弹出法律声明。"
+        else
+            log "写入 EULA 接受状态失败，继续完成还原。"
+        fi
+    elif sqlite_has_column "$db_file" "configs" "eula_accepted"; then
+        if "$sqlite_bin" "$db_file" "UPDATE configs SET eula_accepted=1;" >/dev/null 2>&1; then
+            log "已保留当前实例的旧版 EULA 接受状态。"
+        else
+            log "写入旧版 EULA 接受状态失败，继续完成还原。"
+        fi
+    else
+        log "还原后的数据库没有可识别的 EULA 配置结构，跳过状态保留。"
+    fi
+}
+
 validate_tar_members() {
     local archive="$1"
     local invalid unsupported
@@ -512,12 +587,16 @@ do_restore() {
     local backup_file="$1"
     local expected_sha256="${2:-}"
     local expected_size="${3:-}"
-    local actual_sha256
+    local actual_sha256 preserve_eula_accepted
 
     info "开始还原备份: $backup_file"
     log "开始还原备份: $backup_file"
 
     valid_backup_filename "$backup_file" || error "备份文件名非法: $backup_file"
+    preserve_eula_accepted=$(current_eula_accepted_state)
+    if [ "$preserve_eula_accepted" = "1" ]; then
+        log "当前实例已接受 EULA，备份还原后将保留该状态。"
+    fi
 
     DOWNLOAD_PATH=$(mktemp /tmp/komari_restore.XXXXXX.tar.gz) || error "无法创建下载临时文件。"
     EXTRACT_DIR=$(mktemp -d /tmp/komari_restore_extract.XXXXXX) || error "无法创建解压临时目录。"
@@ -535,6 +614,7 @@ do_restore() {
 
     hint "正在替换数据目录..."
     replace_data_dir "$EXTRACT_DIR/data"
+    preserve_eula_accepted_after_restore "$preserve_eula_accepted"
 
     save_restore_state "$backup_file" "$actual_sha256"
     restart_komari_if_possible
