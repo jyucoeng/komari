@@ -1,11 +1,9 @@
 ARG KOMARI_VERSION=latest
 FROM ghcr.io/komari-monitor/komari:${KOMARI_VERSION:-latest}
-ARG KOMARI_VERSION=latest
 
 ARG CADDY_VERSION="2.9.1"
 ARG TARGETARCH
 ARG TARGETVARIANT
-ENV KOMARI_VERSION="${KOMARI_VERSION:-latest}"
 
 RUN apk add --no-cache bash curl wget git sqlite jq tar supervisor coreutils unzip
 

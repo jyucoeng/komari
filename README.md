@@ -5,6 +5,7 @@
 ## Fork 后需要改哪些
 
 - 源码仓库默认值集中在 `repo.conf`，普通 fork 只改这个文件即可。
+  `repo.conf` 只决定脚本自动更新从哪个源码仓库拉取，和 Komari 程序版本无关。
 - GitHub Actions 会自动发布到当前仓库对应的 GHCR 地址：`ghcr.io/<owner>/<repo>:latest`。
 - Docker Compose 复制 `.env.example` 为 `.env` 后，集中修改镜像、备份仓库、隧道域名、密码和订阅配置。
 - 自动更新脚本默认从 `repo.conf` 中的 `KOMARI_SOURCE_REPOSITORY`、`KOMARI_SOURCE_BRANCH` 拉取脚本；部署时仍可用同名环境变量临时覆盖。
@@ -66,7 +67,7 @@ docker run -d \
 
 ### 版本和脚本来源
 
-- `KOMARI_VERSION` - 构建镜像时使用的上游 Komari 镜像 tag；为空或未指定时使用 `latest`
+- `KOMARI_VERSION` - 构建镜像时使用的上游 `ghcr.io/komari-monitor/komari` 镜像 tag；为空或未指定时使用 `latest`。它只影响打包时选择哪个上游 Komari 版本，不影响 `repo.conf`
 - `KOMARI_SOURCE_REPOSITORY` - 自动更新脚本来源仓库，默认来自 `repo.conf`
 - `KOMARI_SOURCE_BRANCH` - 自动更新脚本来源分支，默认来自 `repo.conf`
 
