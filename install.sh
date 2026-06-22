@@ -55,13 +55,12 @@ SCRIPT_SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ---- Source repo.conf (fallback to jyucoeng/komari) --------------------------
 REPO_CONF_SOURCE="${SCRIPT_SOURCE_DIR}/repo.conf"
-KOMARI_PROJECT_OWNER="jyucoeng"
-KOMARI_PROJECT_NAME="komari"
-KOMARI_SOURCE_BRANCH="main"
-
 if [ -f "$REPO_CONF_SOURCE" ]; then
     . "$REPO_CONF_SOURCE"
 fi
+KOMARI_PROJECT_OWNER="${KOMARI_PROJECT_OWNER:-jyucoeng}"
+KOMARI_PROJECT_NAME="${KOMARI_PROJECT_NAME:-komari}"
+KOMARI_SOURCE_BRANCH="${KOMARI_SOURCE_BRANCH:-main}"
 KOMARI_SOURCE_REPOSITORY="${KOMARI_SOURCE_REPOSITORY:-${KOMARI_PROJECT_OWNER}/${KOMARI_PROJECT_NAME}}"
 
 # ---- Utility functions -------------------------------------------------------
