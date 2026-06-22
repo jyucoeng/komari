@@ -110,7 +110,11 @@ docker run -d \
 | **`BACKUP_TIME`** | 🔸 | 自动备份频率，采用标准 Cron 格式（例如 `*/10 * * * *` 为每10分钟）。 |
 | **`KOMARI_CLOUDFLARED_TOKEN`** | 🔸 | Cloudflare Tunnel 的令牌，用于免公网 IP、免端口放行实现安全内网穿透。 |
 | **`ARGO_DOMAIN`** | 🔸 | 配置了 CF Tunnel 时绑定的访问域名。 |
-| **`UUID`** | 🔸 | Xray 科学上网节点密码。填写后，系统会自动拉起后端并生成订阅链接。 |
+| **`UUID`** | 🔸 | Xray 科学上网节点密码。为空或 `0` 时不启用订阅。 |
+| **`CADDY_PROXY_PORT`** | 🔸 | Caddy 监听端口，默认 `8001`。 |
+| **`CADDY_VERSION`** | 🔸 | Caddy 版本，默认 `2.9.1`。 |
+| **`CF_IP`** | 🔸 | CDN 优选 IP 或可用入口域名，默认 `ip.sb`（不会默认使用 `ARGO_DOMAIN`）。 |
+| **`SUB_NAME`** | 🔸 | 订阅名称，默认 `komari`。 |
 
 *(注：带有 🔸 的为可选高级功能，如果不需要自动备份、穿透或节点，直接在部署命令/配置中删掉对应行即可。)*
 
