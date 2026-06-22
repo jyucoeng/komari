@@ -94,6 +94,28 @@ docker run -d \
  ghcr.io/saodisengyyds/komari:latest
 ```
 
+### 方式三：脚本一键部署（非 Docker 普通 VPS 环境）
+
+如果你不想或者不方便使用 Docker，可以使用上游提供的一键安装脚本直接在宿主机部署：
+
+```shell
+git clone https://github.com/saodisengyyds/komari.git
+cd komari
+sudo bash install.sh
+```
+
+> **注意：** 首次安装后，如果再次运行脚本，会提示选择“保留配置重装”或“完全卸载”。
+
+普通 VPS 安装完成后，你可以使用以下 `komari-cli` 命令进行日常管理：
+
+```shell
+komari-cli status      # 查看服务运行状态
+komari-cli backup      # 手动触发备份
+komari-cli restore f   # 强制恢复最新备份
+komari-cli update      # 更新面板到最新版本
+komari-cli logs caddy  # 查看 Caddy / 节点的运行日志
+```
+
 ---
 
 ## 🏷️ 版本说明
