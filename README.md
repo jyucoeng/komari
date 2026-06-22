@@ -14,12 +14,10 @@
 
 ### 一键安装菜单
 
-服务器上推荐直接运行安装菜单，可选择 Docker 安装或普通 Linux/VPS 安装；二次运行会提示保留配置重装或卸载。
+服务器上执行下面一条命令进入安装菜单，可选择 Docker 安装或普通 Linux/VPS 安装；二次运行会提示保留配置重装或卸载。
 
 ```bash
-git clone https://github.com/hynize/komari.git
-cd komari
-sudo bash install.sh
+git clone https://github.com/hynize/komari.git && cd komari && sudo bash install.sh
 ```
 
 普通 VPS 安装完成后，主要使用：
