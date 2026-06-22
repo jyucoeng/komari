@@ -287,18 +287,7 @@ maybe_trigger_backup_from_readme() {
 }
 
 read_index_metadata() {
-    local metadata filename sha256 size
-    if metadata=$(api_get_raw "$(contents_url latest.json)" 2>/dev/null); then
-        filename=$(printf "%s" "$metadata" | json_value filename)
-        sha256=$(printf "%s" "$metadata" | json_value sha256)
-        size=$(printf "%s" "$metadata" | json_value size)
-        if valid_backup_filename "$filename" && valid_sha256 "$sha256" && valid_size "$size"; then
-            printf '%s %s %s\n' "$filename" "$sha256" "$size"
-            return 0
-        fi
-        log "latest.json 存在但格式无效，尝试读取 README.md。"
-    fi
-
+    # 直接读取 README.md 作为最新的备份索引，不再依赖 latest.json
     metadata_from_readme
 }
 
