@@ -94,6 +94,26 @@ docker run -d \
  ghcr.io/saodisengyyds/komari:latest
 ```
 
+#### 🐳 Docker 环境变量说明：
+
+为了让容器完美工作，你需要根据需求配置上述环境变量：
+
+| 变量名 | 必填 | 作用说明 |
+| :--- | :---: | :--- |
+| **`ADMIN_USERNAME`** | ✅ | Komari 面板管理员的初始登录账号。 |
+| **`ADMIN_PASSWORD`** | ✅ | Komari 面板管理员的初始登录密码。 |
+| **`GH_PAT`** | 🔸 | GitHub 个人访问令牌。如果你需要自动备份，此项必填。 |
+| **`GH_BACKUP_USER`** | 🔸 | GitHub 用户名。用于提交备份代码。 |
+| **`GH_REPO`** | 🔸 | 存放备份数据的 GitHub 私有仓库名称（如：komari-bak）。 |
+| **`GH_EMAIL`** | 🔸 | 提交备份时使用的 GitHub 邮箱。 |
+| **`GH_BACKUP_BRANCH`** | 🔸 | 备份分支，默认填 `main` 即可。 |
+| **`BACKUP_TIME`** | 🔸 | 自动备份频率，采用标准 Cron 格式（例如 `*/10 * * * *` 为每10分钟）。 |
+| **`KOMARI_CLOUDFLARED_TOKEN`** | 🔸 | Cloudflare Tunnel 的令牌，用于免公网 IP、免端口放行实现安全内网穿透。 |
+| **`ARGO_DOMAIN`** | 🔸 | 配置了 CF Tunnel 时绑定的访问域名。 |
+| **`UUID`** | 🔸 | Xray 科学上网节点密码。填写后，系统会自动拉起后端并生成订阅链接。 |
+
+*(注：带有 🔸 的为可选高级功能，如果不需要自动备份、穿透或节点，直接在部署命令/配置中删掉对应行即可。)*
+
 ### 方式三：脚本一键部署（非 Docker 普通 VPS 环境）
 
 如果你不想或者不方便使用 Docker，可以使用上游提供的一键安装脚本直接在宿主机部署：
