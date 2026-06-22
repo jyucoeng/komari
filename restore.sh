@@ -375,6 +375,31 @@ save_restore_state() {
     printf '%s %s\n' "$backup_file" "$backup_sha256" > "$RESTORE_STATE_FILE"
 }
 
+force_public_site_after_restore() {
+    local db_file sqlite_bin
+    [ "${KOMARI_FORCE_PUBLIC_SITE:-1}" = "0" ] && return 0
+    db_file="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
+    [ -f "$db_file" ] || { log "还原后未找到 Komari 数据库，跳过 private_site 修正。"; return 0; }
+    sqlite_bin=$(sqlite_command)
+    [ -n "$sqlite_bin" ] || { log "未找到 sqlite 命令，跳过 private_site 修正。"; return 0; }
+
+    if sqlite_has_column "$db_file" "configs" "key" && sqlite_has_column "$db_file" "configs" "value"; then
+        if "$sqlite_bin" "$db_file" "INSERT OR REPLACE INTO configs(key, value) VALUES ('private_site', 'false');" >/dev/null 2>&1; then
+            log "已将 private_site 修正为 false，避免公开首页 RPC2 被 401 拦截。"
+        else
+            log "写入 private_site=false 失败，继续完成还原。"
+        fi
+    elif sqlite_has_column "$db_file" "configs" "private_site"; then
+        if "$sqlite_bin" "$db_file" "UPDATE configs SET private_site=0;" >/dev/null 2>&1; then
+            log "已将旧版 private_site 修正为 0。"
+        else
+            log "写入旧版 private_site=0 失败，继续完成还原。"
+        fi
+    else
+        log "还原后的数据库没有可识别的 private_site 配置结构，跳过修正。"
+    fi
+}
+
 data_dir_needs_restore() {
     local db_file
     db_file="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
@@ -635,6 +660,7 @@ do_restore() {
     hint "正在替换数据目录..."
     replace_data_dir "$EXTRACT_DIR/data"
     preserve_eula_accepted_after_restore "$preserve_eula_accepted"
+    force_public_site_after_restore
 
     save_restore_state "$backup_file" "$actual_sha256"
     restart_komari_if_possible

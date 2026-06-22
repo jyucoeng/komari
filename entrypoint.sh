@@ -127,6 +127,7 @@ XRAY_VMESS_PORT=${XRAY_VMESS_PORT:-'8003'}
 KOMARI_LISTEN_ADDR=${KOMARI_LISTEN_ADDR:-'0.0.0.0:25774'}
 KOMARI_DISABLE_WEB_SSH=${KOMARI_DISABLE_WEB_SSH:-${DISABLE_WEB_SSH:-1}}
 KOMARI_DISABLE_REMOTE=${KOMARI_DISABLE_REMOTE:-${DISABLE_REMOTE:-1}}
+KOMARI_FORCE_PUBLIC_SITE=${KOMARI_FORCE_PUBLIC_SITE:-1}
 
 # Caddy 版本配置
 if [[ "$CADDY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -155,6 +156,7 @@ echo "export SUB_NAME=\"$SUB_NAME\"" >> "$CRON_ENV_FILE"
 echo "export CADDY_PROXY_PORT=\"$CADDY_PROXY_PORT\"" >> "$CRON_ENV_FILE"
 echo "export XRAY_VLESS_PORT=\"$XRAY_VLESS_PORT\"" >> "$CRON_ENV_FILE"
 echo "export XRAY_VMESS_PORT=\"$XRAY_VMESS_PORT\"" >> "$CRON_ENV_FILE"
+echo "export KOMARI_FORCE_PUBLIC_SITE=\"$KOMARI_FORCE_PUBLIC_SITE\"" >> "$CRON_ENV_FILE"
 chmod 600 "$CRON_ENV_FILE"
 
 mkdir -p "$CRONTAB_DIR"
@@ -448,6 +450,9 @@ EOF
 cat > /usr/local/bin/komari-start << KOMARI_START_EOF
 #!/usr/bin/env sh
 set -eu
+if [ -x /usr/local/bin/komari-force-public-site ]; then
+    /usr/local/bin/komari-force-public-site || true
+fi
 if [ -x /usr/local/bin/komari-disable-remote ]; then
     /usr/local/bin/komari-disable-remote || true
 fi
@@ -460,6 +465,17 @@ fi
 exec /app/komari \$args
 KOMARI_START_EOF
 chmod +x /usr/local/bin/komari-start
+
+cat > /usr/local/bin/komari-force-public-site << 'PUBLIC_SITE_EOF'
+#!/usr/bin/env sh
+[ "${KOMARI_FORCE_PUBLIC_SITE:-1}" = "0" ] && exit 0
+db="${KOMARI_DB_FILE:-/app/data/komari.db}"
+[ -f "$db" ] || exit 0
+command -v sqlite3 >/dev/null 2>&1 || exit 0
+sqlite3 "$db" "INSERT INTO configs(key, value) VALUES ('private_site','false') ON CONFLICT(key) DO UPDATE SET value=excluded.value;" >/dev/null 2>&1 || true
+sqlite3 "$db" "UPDATE configs SET private_site=0 WHERE id IS NOT NULL;" >/dev/null 2>&1 || true
+PUBLIC_SITE_EOF
+chmod +x /usr/local/bin/komari-force-public-site
 
 if truthy "$KOMARI_DISABLE_WEB_SSH" || truthy "$KOMARI_DISABLE_REMOTE"; then
     cat > /usr/local/bin/komari-disable-remote << 'DISABLE_REMOTE_EOF'
