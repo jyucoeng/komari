@@ -299,15 +299,8 @@ write_latest_metadata() {
     local backup_size="$3"
     local created_at="$4"
 
-    cat > latest.json <<EOF
-{
-  "version": 1,
-  "filename": "$backup_file",
-  "sha256": "$backup_sha256",
-  "size": $backup_size,
-  "created_at_utc": "$created_at"
-}
-EOF
+    # 删除旧的 latest.json（如果存在），不再生成它
+    rm -f latest.json
 
     cat > README.md <<EOF
 # Komari Backups
@@ -410,7 +403,7 @@ do_backup() {
     if git push -u origin "$GH_BACKUP_BRANCH"; then
         mark_local_restore_state "$BACKUP_FILE" "$BACKUP_SHA256"
         log "推送成功。"
-    info "备份文件、latest.json 和 README.md 已成功上传至 GitHub。"
+    info "备份文件和 README.md 已成功上传至 GitHub。"
     else
         error "上传失败。请检查网络或 GitHub PAT 权限。"
     fi

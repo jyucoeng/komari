@@ -30,9 +30,9 @@ hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 fetch_url() {
     local url="$1"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsS --connect-timeout "${HTTP_CONNECT_TIMEOUT:-5}" --max-time "${HTTP_MAX_TIME:-10}" "$url" 2>/dev/null || true
+        curl -fsS --connect-timeout "${HTTP_CONNECT_TIMEOUT:-2}" --max-time "${HTTP_MAX_TIME:-3}" "$url" 2>/dev/null || true
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- -T "${HTTP_MAX_TIME:-10}" "$url" 2>/dev/null || true
+        wget -qO- -T "${HTTP_MAX_TIME:-3}" "$url" 2>/dev/null || true
     fi
 }
 

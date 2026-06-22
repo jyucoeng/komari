@@ -117,6 +117,11 @@ download_script() {
         error "下载 $script_name 失败: $url"
     fi
 
+    if ! bash -n "$output_path" >/dev/null 2>&1; then
+        rm -f "$output_path"
+        error "下载的 $script_name 语法损坏或不完整，放弃更新"
+    fi
+
     if [ ! -s "$output_path" ]; then
         error "下载的 $script_name 文件为空"
     fi
