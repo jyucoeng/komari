@@ -6,8 +6,8 @@
 # 此脚本用于自动检测和还原 Komari 面板备份数据。
 # ---------------------------------------------------------------
 # 功能:
-#   - 每分钟读取 GitHub 备份库中的 latest.json 或 README.md。
-#   - 使用文件名 + sha256 比对，避免同名覆盖或坏包误判。
+#   - 每分钟读取 GitHub 备份库 README.md 中的备份文件名。
+#   - 使用文件名和下载校验结果比对，避免重复还原或坏包误判。
 #   - 下载、校验、解包到临时目录后再替换 data，避免还原失败时删库。
 #   - 支持手动指定备份文件、不带参数选择备份文件、README.md 触发立即备份。
 #
@@ -252,19 +252,28 @@ read_backup_readme() {
     api_get_raw "$(contents_url README.md)" 2>/dev/null || true
 }
 
+readme_restore_filename() {
+    local first_line
+    first_line=$(read_backup_readme | sed '/^[[:space:]]*$/d' | head -n 1 | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if valid_backup_filename "$first_line"; then
+        printf '%s\n' "$first_line"
+        return 0
+    fi
+    return 1
+}
+
 readme_command_or_file() {
     read_backup_readme | sed '/^[[:space:]]*$/d' | head -n 1 | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
 metadata_from_readme() {
-    local readme filename sha256 size
-    readme=$(read_backup_readme)
-    [ -n "$readme" ] || return 1
-    filename=$(printf "%s\n" "$readme" | grep -Eo 'komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz' | head -n 1)
-    sha256=$(printf "%s\n" "$readme" | grep -Eio '[a-f0-9]{64}' | head -n 1)
-    size=$(printf "%s\n" "$readme" | sed -n 's/.*Size:[^0-9]*\([0-9][0-9]*\).*/\1/ip' | head -n 1)
-    if valid_backup_filename "$filename"; then
-        printf '%s %s %s\n' "$filename" "${sha256:-unknown}" "${size:-0}"
+    local filename file_meta sha256 size
+    filename=$(readme_restore_filename) || return 1
+    file_meta=$(get_file_metadata_direct "$filename") || return 1
+    sha256=$(printf "%s" "$file_meta" | awk '{print $2}')
+    size=$(printf "%s" "$file_meta" | awk '{print $3}')
+    if valid_backup_filename "$filename" && valid_size "$size"; then
+        printf '%s %s %s\n' "$filename" "${sha256:-unknown}" "$size"
         return 0
     fi
     return 1
@@ -287,15 +296,12 @@ maybe_trigger_backup_from_readme() {
 }
 
 read_index_metadata() {
-    # 直接读取 README.md 作为最新的备份索引，不再依赖 latest.json
+    # README.md 是唯一的自动/强制还原指针。
     metadata_from_readme
 }
 
 read_latest_metadata() {
-    if read_index_metadata; then
-        return 0
-    fi
-    get_latest_backup_from_listing
+    read_index_metadata
 }
 
 get_latest_backup_from_listing() {
@@ -367,6 +373,25 @@ save_restore_state() {
     local backup_sha256="$2"
     mkdir -p "$(dirname "$RESTORE_STATE_FILE")" 2>/dev/null || true
     printf '%s %s\n' "$backup_file" "$backup_sha256" > "$RESTORE_STATE_FILE"
+}
+
+data_dir_needs_restore() {
+    local db_file
+    db_file="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
+
+    if [ ! -d "$DATA_DIR" ]; then
+        log "数据目录不存在，需要执行还原: $DATA_DIR"
+        return 0
+    fi
+    if [ -f "$db_file" ]; then
+        return 1
+    fi
+    if find "$DATA_DIR" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
+        log "数据目录存在但未找到 Komari 数据库，需要执行还原: $db_file"
+    else
+        log "数据目录为空，需要执行还原: $DATA_DIR"
+    fi
+    return 0
 }
 
 sqlite_command() {
@@ -520,16 +545,18 @@ replace_data_dir() {
         rm -rf "${DATA_DIR:?}"/* 2>/dev/null || true
         rm -rf "${DATA_DIR:?}"/.[!.]* 2>/dev/null || true
         OLD_DATA_DIR="$old_dir"
+    else
+        mkdir -p "$DATA_DIR" || error "无法创建数据目录: $DATA_DIR"
     fi
 
-    if cp -a "$new_data"/* "$DATA_DIR/" 2>/dev/null || true; then
-        cp -a "$new_data"/.* "$DATA_DIR/" 2>/dev/null || true
+    if cp -a "$new_data"/. "$DATA_DIR/"; then
         [ -n "$OLD_DATA_DIR" ] && rm -rf "$OLD_DATA_DIR"
         OLD_DATA_DIR=""
     else
         if [ -n "$OLD_DATA_DIR" ] && [ -d "$OLD_DATA_DIR" ]; then
-            cp -a "$OLD_DATA_DIR"/* "$DATA_DIR/" 2>/dev/null || true
-            cp -a "$OLD_DATA_DIR"/.* "$DATA_DIR/" 2>/dev/null || true
+            rm -rf "${DATA_DIR:?}"/* 2>/dev/null || true
+            rm -rf "${DATA_DIR:?}"/.[!.]* 2>/dev/null || true
+            cp -a "$OLD_DATA_DIR"/. "$DATA_DIR/" 2>/dev/null || true
         fi
         OLD_DATA_DIR=""
         error "替换数据目录失败，已尝试恢复旧数据。"
@@ -624,10 +651,10 @@ auto_restore() {
     acquire_lock
 
     if ! latest_state=$(read_latest_metadata); then
-        error "无法读取可信的最新备份索引，拒绝还原。"
+        error "README.md 中没有有效的备份文件名，拒绝还原。"
     fi
     if [ -z "$latest_state" ]; then
-        log "未找到任何备份文件"
+        log "README.md 中没有有效的备份文件名"
         exit 0
     fi
 
@@ -650,6 +677,11 @@ auto_restore() {
             is_new_backup=true
         fi
         latest_sha256=""
+    fi
+
+    if [ "$is_new_backup" != "true" ] && data_dir_needs_restore; then
+        is_new_backup=true
+        log "本地还原记录存在，但数据目录不可用，重新执行还原: $latest_file"
     fi
 
     if [ "$is_new_backup" = "true" ]; then
@@ -724,10 +756,10 @@ force_restore() {
     acquire_lock
 
     if ! latest_state=$(read_latest_metadata); then
-        error "无法读取可信的最新备份索引，拒绝还原。"
+        error "README.md 中没有有效的备份文件名，拒绝还原。"
     fi
     if [ -z "$latest_state" ]; then
-        error "未找到任何备份文件"
+        error "README.md 中没有有效的备份文件名"
     fi
 
     latest_file=$(printf "%s" "$latest_state" | awk '{print $1}')

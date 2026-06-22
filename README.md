@@ -154,8 +154,7 @@ Caddy (:8001)
 备份仓库中会生成这些文件：
 
 - `komari-YYYY-MM-DD-HHMMSS.tar.gz` - 实际数据包，内容是 Komari 的 `data/` 目录
-- `latest.json` - 最新备份索引，记录文件名、大小、sha256 和创建时间
-- `README.md` - 人可读的最新备份摘要，也可以用来触发立即备份
+- `README.md` - 自动/强制还原指针，内容为要还原的备份文件名
 
 ### 自动备份
 
@@ -211,7 +210,7 @@ bash /opt/komari/scripts/backup.sh
 bash /app/backup.sh
 ```
 
-备份成功后，私库会出现新的 `komari-*.tar.gz`，并同步更新 `latest.json` 和 `README.md`。
+备份成功后，私库会出现新的 `komari-*.tar.gz`，并把最新备份文件名写入 `README.md`。
 
 ### README 触发立即备份
 
@@ -224,7 +223,17 @@ now
 立即备份
 ```
 
-容器每分钟运行的自动检查会识别这个指令，然后执行一次立即备份。备份完成后，脚本会把 `README.md` 改回最新备份摘要。
+容器每分钟运行的自动检查会识别这个指令，然后执行一次立即备份。备份完成后，脚本会把 `README.md` 改回最新备份文件名。
+
+### README 指定还原点
+
+如果需要指定还原某个备份版本，直接把备份私库的 `README.md` 改成备份文件名即可，例如：
+
+```text
+komari-2024-01-01-120000.tar.gz
+```
+
+自动还原和 `restore.sh f` 都只读取这个文件名作为还原点。
 
 ### 自动还原
 
@@ -234,13 +243,7 @@ now
 docker exec komari /app/restore.sh a
 ```
 
-自动还原读取顺序是：
-
-1. 优先读取 `latest.json`
-2. `latest.json` 不可用时读取备份私库 `README.md`
-3. 最后回退到备份仓库文件列表里的最新 `komari-*.tar.gz`
-
-脚本会比较本地记录和远程备份的文件名、sha256。只有远程出现新的备份时，才会下载并还原。还原成功后会尝试重启 Komari 进程让数据生效。
+自动还原会读取备份私库 `README.md` 第一行。如果第一行是 `komari-*.tar.gz`，就把它作为还原点；如果是 `backup`、`backup now`、`now` 或 `立即备份`，就执行立即备份。脚本会比较本地记录和远程备份文件名，只有 README 指向新文件、或本地 Docker 数据目录为空/缺少数据库时，才会下载并还原。还原成功后会尝试重启 Komari 进程让数据生效。
 
 查看自动还原日志：
 
@@ -258,7 +261,7 @@ tail -n 100 /opt/komari/logs/restore.log
 
 ### 手动还原
 
-强制还原 `latest.json` 或 `README.md` 指向的最新备份：
+强制还原 `README.md` 指向的备份文件：
 
 ```bash
 docker exec komari /app/restore.sh f

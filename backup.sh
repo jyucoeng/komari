@@ -7,7 +7,7 @@
 # ---------------------------------------------------------------
 # 功能:
 #   - 将 Komari 面板的数据目录打包到私有 GitHub 仓库。
-#   - 生成 latest.json，供还原脚本按文件名 + sha256 对比。
+#   - 将最新备份文件名写入 README.md，供还原脚本读取。
 #   - 备份成功后记录本机已同步状态，避免自动还原重复覆盖自己。
 #
 # 使用方法:
@@ -295,24 +295,11 @@ cleanup_old_backups() {
 
 write_latest_metadata() {
     local backup_file="$1"
-    local backup_sha256="$2"
-    local backup_size="$3"
-    local created_at="$4"
 
-    # 删除旧的 latest.json（如果存在），不再生成它
+    # 清理旧版索引文件；README.md 是唯一的自动还原指针。
     rm -f latest.json
 
-    cat > README.md <<EOF
-# Komari Backups
-
-Latest backup: \`$backup_file\`
-
-- Created at (UTC): $created_at
-- SHA256: \`$backup_sha256\`
-- Size: $backup_size bytes
-
-This repository is used by the Komari backup/restore scripts. Keep it private.
-EOF
+    printf '%s\n' "$backup_file" > README.md
 }
 
 mark_local_restore_state() {
@@ -383,7 +370,7 @@ do_backup() {
 
     cd "$BACKUP_TEMP_DIR" || error "进入临时仓库目录失败。"
     cleanup_old_backups
-    write_latest_metadata "$BACKUP_FILE" "$BACKUP_SHA256" "$BACKUP_SIZE" "$CREATED_AT"
+    write_latest_metadata "$BACKUP_FILE"
 
     git config user.name "$GH_BACKUP_USER"
     git config user.email "$GH_EMAIL"
