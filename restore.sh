@@ -18,6 +18,18 @@
 #   - 交互选择备份: bash restore.sh
 #===============================================================
 
+# 运行模式检测
+if [ -f /.dockerenv ] || [ -x /app/komari ]; then
+    RUN_MODE="docker"
+    WORK_DIR_DEFAULT="/app"
+else
+    RUN_MODE="vps"
+    WORK_DIR_DEFAULT="${KOMARI_HOME:-/opt/komari}"
+fi
+WORK_DIR="${WORK_DIR:-$WORK_DIR_DEFAULT}"
+CONF_DIR="${CONF_DIR:-${WORK_DIR}/conf}"
+SCRIPT_DIR="${SCRIPT_DIR:-${WORK_DIR}/scripts}"
+
 set -o pipefail
 
 #---------------------------------------------------------------
@@ -32,20 +44,27 @@ GH_EMAIL="${GH_EMAIL:-}"
 #---------------------------------------------------------------
 # 面板工作目录配置
 #---------------------------------------------------------------
-WORK_DIR="${WORK_DIR:-/app}"
 DATA_DIR="${DATA_DIR:-${WORK_DIR}/data}"
-RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore}}"
-RESTORE_LOG="${RESTORE_LOG:-/tmp/restore.log}"
+if [ "$RUN_MODE" = "vps" ]; then
+    RESTORE_LOG="${RESTORE_LOG:-${WORK_DIR}/logs/restore.log}"
+    BACKUP_SCRIPT_DEFAULT="${SCRIPT_DIR}/backup.sh"
+    RESTORE_STATE_DEFAULT="${WORK_DIR}/logs/last_restore"
+else
+    RESTORE_LOG="${RESTORE_LOG:-/tmp/restore.log}"
+    BACKUP_SCRIPT_DEFAULT="${WORK_DIR}/backup.sh"
+    RESTORE_STATE_DEFAULT="/tmp/last_restore"
+fi
 LOCK_DIR="${KOMARI_BACKUP_LOCK_DIR:-/tmp/komari-backup-restore.lock}"
 LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
-BACKUP_SCRIPT="${BACKUP_SCRIPT:-${WORK_DIR}/backup.sh}"
+BACKUP_SCRIPT="${BACKUP_SCRIPT:-${BACKUP_SCRIPT_DEFAULT}}"
+RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-$RESTORE_STATE_DEFAULT}}"
 NO_ACTION_FLAG="${KOMARI_NO_ACTION_FLAG:-/tmp/komari-no-action}"
 
 #---------------------------------------------------------------
 # 脚本核心逻辑
 #---------------------------------------------------------------
 info() { echo -e "\033[32m\033[01m$*\033[0m"; }
-error() { echo -e "\033[31m\033[01m$*\033[0m" >&2; exit 1; }
+error() { log "ERROR: $*"; echo -e "\033[31m\033[01m$*\033[0m" >&2; exit 1; }
 hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 
 DOWNLOAD_PATH=""
@@ -75,6 +94,19 @@ log() {
     mkdir -p "$(dirname "$RESTORE_LOG")" 2>/dev/null || true
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*" >> "$RESTORE_LOG"
 }
+
+load_env_file() {
+    local env_file="${KOMARI_ENV_FILE:-${CONF_DIR}/.env}"
+    if [ -f "$env_file" ]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        . "$env_file"
+        set +o allexport
+        log "已加载环境配置: $env_file"
+    fi
+}
+load_env_file
+log "restore.sh start - mode: $RUN_MODE args=$*"
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || error "缺少必需命令: $1"
@@ -348,6 +380,81 @@ save_restore_state() {
     printf '%s %s\n' "$backup_file" "$backup_sha256" > "$RESTORE_STATE_FILE"
 }
 
+sqlite_command() {
+    command -v sqlite3 2>/dev/null || command -v sqlite 2>/dev/null || true
+}
+
+truthy_config_value() {
+    local value
+    value=$(printf "%s" "$1" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//' | tr '[:upper:]' '[:lower:]')
+    case "$value" in
+        true|1|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sqlite_has_column() {
+    local db_file="$1" table_name="$2" column_name="$3" sqlite_bin
+    sqlite_bin=$(sqlite_command)
+    [ -n "$sqlite_bin" ] || return 1
+    "$sqlite_bin" "$db_file" "PRAGMA table_info($table_name);" 2>/dev/null | \
+        awk -F'|' -v column="$column_name" 'tolower($2) == tolower(column) { found=1 } END { exit found ? 0 : 1 }'
+}
+
+current_eula_accepted_state() {
+    local db_file sqlite_bin value
+    if [ "${KOMARI_RESTORE_PRESERVE_EULA:-1}" = "0" ]; then
+        printf '0\n'
+        return 0
+    fi
+
+    db_file="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
+    [ -f "$db_file" ] || { printf '0\n'; return 0; }
+    sqlite_bin=$(sqlite_command)
+    [ -n "$sqlite_bin" ] || { printf '0\n'; return 0; }
+
+    if sqlite_has_column "$db_file" "configs" "key" && sqlite_has_column "$db_file" "configs" "value"; then
+        value=$("$sqlite_bin" "$db_file" "SELECT value FROM configs WHERE key='eula_accepted' LIMIT 1;" 2>/dev/null | head -n 1)
+    elif sqlite_has_column "$db_file" "configs" "eula_accepted"; then
+        value=$("$sqlite_bin" "$db_file" "SELECT eula_accepted FROM configs ORDER BY id DESC LIMIT 1;" 2>/dev/null | head -n 1)
+    else
+        printf '0\n'
+        return 0
+    fi
+
+    if truthy_config_value "$value"; then
+        printf '1\n'
+    else
+        printf '0\n'
+    fi
+}
+
+preserve_eula_accepted_after_restore() {
+    local should_preserve="$1" db_file sqlite_bin
+    [ "$should_preserve" = "1" ] || return 0
+
+    db_file="${KOMARI_DB_FILE:-${DATA_DIR}/komari.db}"
+    [ -f "$db_file" ] || { log "还原后未找到 Komari 数据库，跳过 EULA 接受状态保留。"; return 0; }
+    sqlite_bin=$(sqlite_command)
+    [ -n "$sqlite_bin" ] || { log "未找到 sqlite 命令，跳过 EULA 接受状态保留。"; return 0; }
+
+    if sqlite_has_column "$db_file" "configs" "key" && sqlite_has_column "$db_file" "configs" "value"; then
+        if "$sqlite_bin" "$db_file" "INSERT OR REPLACE INTO configs(key, value) VALUES ('eula_accepted', 'true');" >/dev/null 2>&1; then
+            log "已保留当前实例的 EULA 接受状态，避免还原旧备份后重复弹出法律声明。"
+        else
+            log "写入 EULA 接受状态失败，继续完成还原。"
+        fi
+    elif sqlite_has_column "$db_file" "configs" "eula_accepted"; then
+        if "$sqlite_bin" "$db_file" "UPDATE configs SET eula_accepted=1;" >/dev/null 2>&1; then
+            log "已保留当前实例的旧版 EULA 接受状态。"
+        else
+            log "写入旧版 EULA 接受状态失败，继续完成还原。"
+        fi
+    else
+        log "还原后的数据库没有可识别的 EULA 配置结构，跳过状态保留。"
+    fi
+}
+
 validate_tar_members() {
     local archive="$1"
     local invalid unsupported
@@ -448,6 +555,14 @@ restart_komari_if_possible() {
         return 0
     fi
 
+    if [ "$RUN_MODE" = "vps" ] && command -v systemctl >/dev/null 2>&1; then
+        if systemctl restart komari 2>/dev/null; then
+            log "已通过 systemctl 重启 Komari 进程以加载还原数据。"
+            return 0
+        fi
+        log "systemctl 重启 Komari 失败，继续尝试其他方式。"
+    fi
+
     if command -v supervisorctl >/dev/null 2>&1; then
         if supervisorctl -c /etc/supervisor.d/damon.conf restart komari >/dev/null 2>&1; then
             log "已通过 Supervisor 重启 Komari 进程以加载还原数据"
@@ -476,12 +591,16 @@ do_restore() {
     local backup_file="$1"
     local expected_sha256="${2:-}"
     local expected_size="${3:-}"
-    local actual_sha256
+    local actual_sha256 preserve_eula_accepted
 
     info "开始还原备份: $backup_file"
     log "开始还原备份: $backup_file"
 
     valid_backup_filename "$backup_file" || error "备份文件名非法: $backup_file"
+    preserve_eula_accepted=$(current_eula_accepted_state)
+    if [ "$preserve_eula_accepted" = "1" ]; then
+        log "当前实例已接受 EULA，备份还原后将保留该状态。"
+    fi
 
     DOWNLOAD_PATH=$(mktemp /tmp/komari_restore.XXXXXX.tar.gz) || error "无法创建下载临时文件。"
     EXTRACT_DIR=$(mktemp -d /tmp/komari_restore_extract.XXXXXX) || error "无法创建解压临时目录。"
@@ -499,6 +618,7 @@ do_restore() {
 
     hint "正在替换数据目录..."
     replace_data_dir "$EXTRACT_DIR/data"
+    preserve_eula_accepted_after_restore "$preserve_eula_accepted"
 
     save_restore_state "$backup_file" "$actual_sha256"
     restart_komari_if_possible

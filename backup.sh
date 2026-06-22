@@ -3,7 +3,7 @@
 #===============================================================
 #               Komari Dashboard Backup Script
 #
-# 此脚本专为 Docker 版 Komari 面板数据备份设计。
+# 此脚本支持 Docker 与普通 Linux/VPS 两种运行模式。
 # ---------------------------------------------------------------
 # 功能:
 #   - 将 Komari 面板的数据目录打包到私有 GitHub 仓库。
@@ -15,6 +15,44 @@
 #===============================================================
 
 set -o pipefail
+#---------------------------------------------------------------
+# 运行模式检测（Docker / VPS）
+#---------------------------------------------------------------
+if [ -f /.dockerenv ] || [ -x /app/komari ]; then
+    RUN_MODE="docker"
+    WORK_DIR_DEFAULT="/app"
+else
+    RUN_MODE="vps"
+    WORK_DIR_DEFAULT="${KOMARI_HOME:-/opt/komari}"
+fi
+WORK_DIR="${WORK_DIR:-$WORK_DIR_DEFAULT}"
+CONF_DIR="${CONF_DIR:-${WORK_DIR}/conf}"
+
+#---------------------------------------------------------------
+# 日志
+#---------------------------------------------------------------
+if [ "$RUN_MODE" = "vps" ]; then
+    LOG_FILE="${LOG_FILE:-${WORK_DIR}/logs/backup.log}"
+    RESTORE_STATE_DEFAULT="${WORK_DIR}/logs/last_restore"
+else
+    LOG_FILE="${LOG_FILE:-/tmp/backup.log}"
+    RESTORE_STATE_DEFAULT="/tmp/last_restore"
+fi
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+log() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+log "backup.sh 启动 — 运行模式: $RUN_MODE | WORK_DIR=$WORK_DIR"
+
+load_env_file() {
+    local env_file="${KOMARI_ENV_FILE:-${CONF_DIR}/.env}"
+    if [ -f "$env_file" ]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        . "$env_file"
+        set +o allexport
+        log "已加载环境配置: $env_file"
+    fi
+}
+load_env_file
 
 #---------------------------------------------------------------
 # GITHUB 仓库配置 (建议通过环境变量传递)
@@ -29,21 +67,20 @@ GH_EMAIL="${GH_EMAIL:-your_github_email@example.com}"
 # 备份相关配置
 #---------------------------------------------------------------
 BACKUP_DAYS="${BACKUP_DAYS:-10}"
-RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-/tmp/last_restore}}"
+RESTORE_STATE_FILE="${RESTORE_STATE_FILE:-${RESTORE_FLAG_FILE:-$RESTORE_STATE_DEFAULT}}"
 LOCK_DIR="${KOMARI_BACKUP_LOCK_DIR:-/tmp/komari-backup-restore.lock}"
 LOCK_TIMEOUT_SECONDS="${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
 
 #---------------------------------------------------------------
 # 面板工作目录配置 (默认与 Dockerfile 中 Komari 的工作路径保持一致)
 #---------------------------------------------------------------
-WORK_DIR="${WORK_DIR:-/app}"
 DATA_DIR="${DATA_DIR:-${WORK_DIR}/data}"
 
 #---------------------------------------------------------------
 # 脚本核心逻辑
 #---------------------------------------------------------------
 info() { echo -e "\033[32m\033[01m$*\033[0m"; }
-error() { echo -e "\033[31m\033[01m$*\033[0m"; exit 1; }
+error() { log "ERROR: $*"; echo -e "\033[31m\033[01m$*\033[0m"; exit 1; }
 hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 
 BACKUP_TEMP_DIR=""
@@ -231,6 +268,7 @@ create_data_snapshot() {
     mkdir -p "$BACKUP_STAGE_DIR/data"
 
     hint "正在创建数据快照: $DATA_DIR"
+    log "创建数据快照: $DATA_DIR"
     cp -a "$DATA_DIR"/. "$BACKUP_STAGE_DIR/data"/ || error "复制数据目录失败。"
     snapshot_sqlite_files
     validate_snapshot_types
@@ -316,6 +354,7 @@ prepare_backup_repo() {
 
 do_backup() {
     info "============== 开始执行 Komari 备份任务 =============="
+    log "========== 备份任务开始 =========="
 
     require_command git
     require_command tar
@@ -334,6 +373,7 @@ do_backup() {
     BACKUP_FILE="komari-$TIME.tar.gz"
 
     hint "正在压缩数据快照..."
+    log "压缩数据快照 -> $BACKUP_FILE"
     tar czf "$BACKUP_TEMP_DIR/$BACKUP_FILE" -C "$BACKUP_STAGE_DIR" data/ || error "压缩数据目录失败。"
 
     if [ ! -s "$BACKUP_TEMP_DIR/$BACKUP_FILE" ]; then
@@ -346,6 +386,7 @@ do_backup() {
     BACKUP_SHA256=$(sha256sum "$BACKUP_TEMP_DIR/$BACKUP_FILE" | awk '{print $1}')
     BACKUP_SIZE=$(wc -c < "$BACKUP_TEMP_DIR/$BACKUP_FILE" | tr -d ' ')
     info "文件已压缩为: $BACKUP_FILE"
+    log "备份文件: $BACKUP_FILE sha256=$BACKUP_SHA256 size=$BACKUP_SIZE"
 
     cd "$BACKUP_TEMP_DIR" || error "进入临时仓库目录失败。"
     cleanup_old_backups
@@ -368,23 +409,25 @@ do_backup() {
 
     if git push -u origin "$GH_BACKUP_BRANCH"; then
         mark_local_restore_state "$BACKUP_FILE" "$BACKUP_SHA256"
-        info "备份文件、latest.json 和 README.md 已成功上传至 GitHub。"
+        log "推送成功。"
+    info "备份文件、latest.json 和 README.md 已成功上传至 GitHub。"
     else
         error "上传失败。请检查网络或 GitHub PAT 权限。"
     fi
 
+    log "========== 备份任务完成 =========="
     info "============== 备份任务执行完毕 =============="
 }
 
 case "${1:-}" in
-    ""|bak|backup|now|a)
+    "")
         do_backup
         ;;
     *)
         echo "使用方法:"
         echo "  $0       - 立即执行备份"
         echo ""
-        echo "注意：还原功能请使用 restore.sh"
+        echo "注意：立即备份不需要参数；还原功能请使用 restore.sh"
         exit 1
         ;;
 esac
