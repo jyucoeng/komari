@@ -606,6 +606,15 @@ restart_komari_if_possible() {
         return 0
     fi
 
+    if [ "$RUN_MODE" = "docker" ]; then
+        if command -v supervisorctl >/dev/null 2>&1 && supervisorctl -c /etc/supervisor.d/damon.conf restart komari >/dev/null 2>&1; then
+            log "已通过 Supervisor 重启 Komari 进程以加载还原数据。"
+            return 0
+        fi
+        log "Docker 模式下未能通过 Supervisor 重启 Komari；为避免容器被平台判定失败，不再发送 TERM。"
+        return 0
+    fi
+
     if [ "$RUN_MODE" = "vps" ] && command -v systemctl >/dev/null 2>&1; then
         if systemctl restart komari 2>/dev/null; then
             log "已通过 systemctl 重启 Komari 进程以加载还原数据。"

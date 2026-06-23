@@ -368,6 +368,8 @@ docker exec komari tail -f /tmp/backup.log
 docker exec komari tail -f /tmp/restore-cron.log
 ```
 
+Docker 还原完成后脚本只会尝试重启 Komari 进程，不会主动重启 cloudflared；若平台日志里出现历史 `Connection terminated`，通常是容器/隧道进程被重启时的连接关闭日志。
+
 ---
 
 ### VPS 原生环境

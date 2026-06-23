@@ -85,12 +85,14 @@ hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 
 BACKUP_TEMP_DIR=""
 BACKUP_STAGE_DIR=""
+BACKUP_ARCHIVE_PATH=""
 ASKPASS_SCRIPT=""
 LOCK_ACQUIRED="0"
 
 cleanup() {
     [ -n "$ASKPASS_SCRIPT" ] && rm -f "$ASKPASS_SCRIPT"
     [ -n "$BACKUP_STAGE_DIR" ] && [ -d "$BACKUP_STAGE_DIR" ] && rm -rf "$BACKUP_STAGE_DIR"
+    [ -n "$BACKUP_ARCHIVE_PATH" ] && [ -f "$BACKUP_ARCHIVE_PATH" ] && rm -f "$BACKUP_ARCHIVE_PATH"
     [ -n "$BACKUP_TEMP_DIR" ] && [ -d "$BACKUP_TEMP_DIR" ] && rm -rf "$BACKUP_TEMP_DIR"
     if [ "$LOCK_ACQUIRED" = "1" ]; then
         rm -rf "$LOCK_DIR" 2>/dev/null || true
@@ -200,7 +202,7 @@ acquire_lock() {
 }
 
 setup_git_auth() {
-    ASKPASS_SCRIPT=$(mktemp /tmp/komari_git_askpass.XXXXXX) || error "无法创建 Git 认证临时文件。"
+    ASKPASS_SCRIPT=$(mktemp "${KOMARI_BACKUP_TMP_DIR:-/tmp}/komari_git_askpass.XXXXXX") || error "无法创建 Git 认证临时文件。"
     cat > "$ASKPASS_SCRIPT" <<'EOF'
 #!/usr/bin/env sh
 case "$1" in
@@ -276,7 +278,8 @@ validate_snapshot_types() {
 create_data_snapshot() {
     [ -d "$DATA_DIR" ] || error "备份数据目录不存在: $DATA_DIR"
 
-    BACKUP_STAGE_DIR=$(mktemp -d /tmp/komari_backup_stage.XXXXXX) || error "无法创建备份临时目录。"
+    mkdir -p "${KOMARI_BACKUP_TMP_DIR:-/tmp}" 2>/dev/null || true
+    BACKUP_STAGE_DIR=$(mktemp -d "${KOMARI_BACKUP_TMP_DIR:-/tmp}/komari_backup_stage.XXXXXX") || error "无法创建备份临时目录。"
     mkdir -p "$BACKUP_STAGE_DIR/data"
 
     hint "正在创建数据快照: $DATA_DIR"
@@ -297,12 +300,23 @@ cleanup_old_backups() {
         return 0
     fi
 
-    find . -maxdepth 1 -name 'komari-*.tar.gz' -type f -print | while IFS= read -r file; do
+    list_repo_backup_files | while IFS= read -r file; do
         file_stamp=$(basename "$file" | sed -n 's/^komari-\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}-[0-9]\{6\}\)\.tar\.gz$/\1/p')
         if [ -n "$file_stamp" ] && [ "$file_stamp" \< "$cutoff_stamp" ]; then
-            rm -f "$file"
+            git rm -f --ignore-unmatch --sparse -- "$file" >/dev/null 2>&1 || \
+                git rm -f --cached --ignore-unmatch -- "$file" >/dev/null 2>&1 || \
+                git update-index --force-remove -- "$file" >/dev/null 2>&1 || true
+            rm -f "$file" 2>/dev/null || true
         fi
     done
+}
+
+list_repo_backup_files() {
+    if git rev-parse --verify HEAD >/dev/null 2>&1; then
+        git ls-tree -r --name-only HEAD 2>/dev/null | grep -E '^komari-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz$' || true
+    else
+        find . -maxdepth 1 -name 'komari-*.tar.gz' -type f -exec basename {} \; 2>/dev/null || true
+    fi
 }
 
 write_latest_metadata() {
@@ -323,25 +337,30 @@ mark_local_restore_state() {
 
 prepare_backup_repo() {
     setup_git_auth
-    BACKUP_TEMP_DIR=$(mktemp -d /tmp/komari_backup_repo.XXXXXX) || error "无法创建临时仓库目录。"
+    BACKUP_TEMP_DIR=$(mktemp -d "${KOMARI_BACKUP_TMP_DIR:-/tmp}/komari_backup_repo.XXXXXX") || error "无法创建临时仓库目录。"
     repo_url="https://github.com/$GH_BACKUP_USER/$GH_REPO.git"
 
-    hint "正在克隆备份仓库..."
-    if ! git clone --depth 1 "$repo_url" "$BACKUP_TEMP_DIR"; then
-        error "克隆 GitHub 仓库失败。请检查 GH_PAT、仓库名或网络连接。"
-    fi
-
-    cd "$BACKUP_TEMP_DIR" || error "进入临时仓库目录失败。"
-    git remote set-url origin "$repo_url"
-
-    if git ls-remote --exit-code --heads origin "$GH_BACKUP_BRANCH" >/dev/null 2>&1; then
-        git fetch --depth 1 origin "$GH_BACKUP_BRANCH" || error "拉取备份分支失败。"
-        git checkout -B "$GH_BACKUP_BRANCH" FETCH_HEAD >/dev/null 2>&1 || error "切换到备份分支失败。"
-    elif git rev-parse --verify HEAD >/dev/null 2>&1; then
-        git checkout -B "$GH_BACKUP_BRANCH" >/dev/null 2>&1 || error "创建备份分支失败。"
+    hint "正在轻量克隆备份仓库索引..."
+    if git ls-remote --exit-code --heads "$repo_url" "$GH_BACKUP_BRANCH" >/dev/null 2>&1; then
+        if git clone --depth 1 --filter=blob:none --no-checkout --branch "$GH_BACKUP_BRANCH" "$repo_url" "$BACKUP_TEMP_DIR" >/dev/null 2>&1; then
+            cd "$BACKUP_TEMP_DIR" || error "进入临时仓库目录失败。"
+            git sparse-checkout init --no-cone >/dev/null 2>&1 || true
+            if ! git sparse-checkout set --no-cone README.md latest.json >/dev/null 2>&1; then
+                printf '/README.md\n/latest.json\n' > .git/info/sparse-checkout
+            fi
+            git checkout "$GH_BACKUP_BRANCH" >/dev/null 2>&1 || true
+        else
+            error "轻量克隆 GitHub 仓库失败。请检查 GH_PAT、仓库名或网络连接。"
+        fi
     else
-        git symbolic-ref HEAD "refs/heads/$GH_BACKUP_BRANCH"
+        cd "$BACKUP_TEMP_DIR" || error "进入临时仓库目录失败。"
+        git init -b "$GH_BACKUP_BRANCH" >/dev/null 2>&1 || {
+            git init >/dev/null 2>&1 || error "初始化备份仓库失败。"
+            git checkout -B "$GH_BACKUP_BRANCH" >/dev/null 2>&1 || error "创建备份分支失败。"
+        }
+        git remote add origin "$repo_url"
     fi
+    git remote set-url origin "$repo_url"
 }
 
 do_backup() {
@@ -358,35 +377,39 @@ do_backup() {
 
     cd "$WORK_DIR" || error "无法进入工作目录: $WORK_DIR"
     create_data_snapshot
-    prepare_backup_repo
 
     TIME=$(date -u "+%Y-%m-%d-%H%M%S")
     CREATED_AT=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
     BACKUP_FILE="komari-$TIME.tar.gz"
+    BACKUP_ARCHIVE_PATH=$(mktemp "${KOMARI_BACKUP_TMP_DIR:-/tmp}/komari_archive.XXXXXX.tar.gz") || error "无法创建备份压缩临时文件。"
 
     hint "正在压缩数据快照..."
     log "压缩数据快照 -> $BACKUP_FILE"
-    tar czf "$BACKUP_TEMP_DIR/$BACKUP_FILE" -C "$BACKUP_STAGE_DIR" data/ || error "压缩数据目录失败。"
+    tar czf "$BACKUP_ARCHIVE_PATH" -C "$BACKUP_STAGE_DIR" data/ || error "压缩数据目录失败。"
 
-    if [ ! -s "$BACKUP_TEMP_DIR/$BACKUP_FILE" ]; then
+    if [ ! -s "$BACKUP_ARCHIVE_PATH" ]; then
         error "压缩文件失败或文件为空。"
     fi
-    if ! tar -tzf "$BACKUP_TEMP_DIR/$BACKUP_FILE" >/dev/null 2>&1; then
+    if ! tar -tzf "$BACKUP_ARCHIVE_PATH" >/dev/null 2>&1; then
         error "备份文件已损坏，无法验证 tar 文件完整性。"
     fi
 
-    BACKUP_SHA256=$(sha256sum "$BACKUP_TEMP_DIR/$BACKUP_FILE" | awk '{print $1}')
-    BACKUP_SIZE=$(wc -c < "$BACKUP_TEMP_DIR/$BACKUP_FILE" | tr -d ' ')
+    BACKUP_SHA256=$(sha256sum "$BACKUP_ARCHIVE_PATH" | awk '{print $1}')
+    BACKUP_SIZE=$(wc -c < "$BACKUP_ARCHIVE_PATH" | tr -d ' ')
     info "文件已压缩为: $BACKUP_FILE"
     log "备份文件: $BACKUP_FILE sha256=$BACKUP_SHA256 size=$BACKUP_SIZE"
 
+    prepare_backup_repo
     cd "$BACKUP_TEMP_DIR" || error "进入临时仓库目录失败。"
+    mv "$BACKUP_ARCHIVE_PATH" "$BACKUP_FILE" || error "移动备份文件到仓库工作区失败。"
+    rm -f "$BACKUP_ARCHIVE_PATH"
+    BACKUP_ARCHIVE_PATH=""
     cleanup_old_backups
     write_latest_metadata "$BACKUP_FILE"
 
     git config user.name "$GH_BACKUP_USER"
     git config user.email "$GH_EMAIL"
-    git add --all
+    git add --sparse --all 2>/dev/null || git add --all
 
     if git status --porcelain | grep -q .; then
         git commit -m "Backup at $TIME" || error "创建备份提交失败。"
@@ -400,7 +423,8 @@ do_backup() {
         # 普通的 pull --rebase 会因 README 冲突而中断备份。
         # 使用 -X theirs 让本次（最新）备份的 README 胜出；
         # 各节点的 tar.gz 文件名含时间戳、互不冲突，会被正常合并保留。
-        git pull --rebase -X theirs origin "$GH_BACKUP_BRANCH" || error "同步远程备份仓库失败。"
+        git fetch --depth 1 --filter=blob:none origin "$GH_BACKUP_BRANCH" || error "拉取远程备份仓库失败。"
+        git rebase -X theirs FETCH_HEAD || error "同步远程备份仓库失败。"
     fi
 
     if git push -u origin "$GH_BACKUP_BRANCH"; then
