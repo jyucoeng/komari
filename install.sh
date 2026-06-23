@@ -603,8 +603,12 @@ if [ -n "${UUID:-}" ] && [ "${UUID}" != "0" ]; then
         rewrite * /list.log
         file_server { root /tmp }
     }
-    reverse_proxy /vls* 127.0.0.1:${XRAY_VLESS_PORT}
-    reverse_proxy /vms* 127.0.0.1:${XRAY_VMESS_PORT}
+    handle /vls* {
+        reverse_proxy 127.0.0.1:${XRAY_VLESS_PORT}
+    }
+    handle /vms* {
+        reverse_proxy 127.0.0.1:${XRAY_VMESS_PORT}
+    }
 CADDYEOF
 fi
 
@@ -612,7 +616,9 @@ if [ "${KOMARI_DISABLE_WEB_SSH:-1}" = "1" ] || [ "${KOMARI_DISABLE_WEB_SSH:-1}" 
    [ "${KOMARI_DISABLE_REMOTE:-1}" = "1" ] || [ "${KOMARI_DISABLE_REMOTE:-1}" = "true" ]; then
     cat >> "$CADDYFILE" << 'CADDYEOF'
     @blockedRemote path_regexp blockedRemote ^/(api/clients/terminal|api/admin/client/[^/]+/terminal|api/admin/task/exec|terminal)(/.*)?$
-    respond @blockedRemote 403
+    handle @blockedRemote {
+        respond 403
+    }
 CADDYEOF
 fi
 
@@ -652,7 +658,7 @@ XRAYEOF
     info "xray.json generated at ${XRAY_CONF}"
     if [ -x "/opt/komari/scripts/sub_link.sh" ]; then
         info "Generating subscription links..."
-        export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP="${CF_IP:-ip.sb}" SUB_NAME="${SUB_NAME:-komari}"
+        export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP="${CF_IP:-ip.sb}" SUB_HOST SUB_SNI SUB_NAME="${SUB_NAME:-komari}"
         bash "/opt/komari/scripts/sub_link.sh" || hint "Subscription link generation failed."
     fi
 else
@@ -808,6 +814,8 @@ KOMARI_DISABLE_REMOTE=1
 # Optional subscription UUID (leave empty to disable)
 UUID=
 CF_IP=ip.sb
+SUB_HOST=
+SUB_SNI=
 SUB_NAME=komari
 
 # Komari listen address
@@ -996,6 +1004,8 @@ export RENEW_LOG="/opt/komari/logs/renew.log"
 export UUID="${UUID:-}"
 export ARGO_DOMAIN="${ARGO_DOMAIN:-}"
 export CF_IP="${CF_IP:-ip.sb}"
+export SUB_HOST="${SUB_HOST:-${ARGO_DOMAIN:-}}"
+export SUB_SNI="${SUB_SNI:-${ARGO_DOMAIN:-}}"
 export SUB_NAME="${SUB_NAME:-komari}"
 export CADDY_PROXY_PORT="${CADDY_PROXY_PORT:-8001}"
 export XRAY_VLESS_PORT="${XRAY_VLESS_PORT:-8002}"
@@ -1154,7 +1164,7 @@ case "${1:-help}" in
             set -o allexport
             . "${CONF_DIR}/.env"
             set +o allexport
-            export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP SUB_NAME
+            export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP SUB_HOST SUB_SNI SUB_NAME
         fi
         sudo bash "${SCRIPT_DIR}/sub_link.sh" ;;
     edit-config|env)

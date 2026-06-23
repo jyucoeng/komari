@@ -128,6 +128,10 @@ KOMARI_LISTEN_ADDR=${KOMARI_LISTEN_ADDR:-'0.0.0.0:25774'}
 KOMARI_DISABLE_WEB_SSH=${KOMARI_DISABLE_WEB_SSH:-${DISABLE_WEB_SSH:-1}}
 KOMARI_DISABLE_REMOTE=${KOMARI_DISABLE_REMOTE:-${DISABLE_REMOTE:-1}}
 KOMARI_FORCE_PUBLIC_SITE=${KOMARI_FORCE_PUBLIC_SITE:-1}
+CF_IP=${CF_IP:-ip.sb}
+SUB_HOST=${SUB_HOST:-${ARGO_DOMAIN:-}}
+SUB_SNI=${SUB_SNI:-${ARGO_DOMAIN:-}}
+SUB_NAME=${SUB_NAME:-komari}
 
 # Caddy 版本配置
 if [[ "$CADDY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -152,6 +156,8 @@ echo "export KOMARI_PROJECT_NAME=\"$KOMARI_PROJECT_NAME\"" >> "$CRON_ENV_FILE"
 echo "export UUID=\"$UUID\"" >> "$CRON_ENV_FILE"
 echo "export ARGO_DOMAIN=\"$ARGO_DOMAIN\"" >> "$CRON_ENV_FILE"
 echo "export CF_IP=\"$CF_IP\"" >> "$CRON_ENV_FILE"
+echo "export SUB_HOST=\"$SUB_HOST\"" >> "$CRON_ENV_FILE"
+echo "export SUB_SNI=\"$SUB_SNI\"" >> "$CRON_ENV_FILE"
 echo "export SUB_NAME=\"$SUB_NAME\"" >> "$CRON_ENV_FILE"
 echo "export CADDY_PROXY_PORT=\"$CADDY_PROXY_PORT\"" >> "$CRON_ENV_FILE"
 echo "export XRAY_VLESS_PORT=\"$XRAY_VLESS_PORT\"" >> "$CRON_ENV_FILE"
@@ -278,40 +284,44 @@ fi
 # 避免 Komari 内置 cloudflared 管理器启动第二份隧道
 rm -f /usr/local/bin/cloudflared /usr/bin/cloudflared
 
-# 生成 Caddyfile（如果不存在则创建，否则使用现有配置）
+# 生成或刷新 Caddyfile / Xray 配置。旧配置可能沿用错误的 WS 反代或双栈监听，导致节点测速 -1。
+REFRESH_PROXY_CONFIG=0
 if [ ! -f "$CADDYFILE" ]; then
-    hint "生成新的 Caddyfile 配置..."
-    
-    # 如果设置了 UUID，配置节点订阅反代
+    REFRESH_PROXY_CONFIG=1
+else
     if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
-        # 生成 Xray 配置文件
+        if ! grep -q 'handle /vls\*' "$CADDYFILE" 2>/dev/null || \
+           ! grep -q 'handle /vms\*' "$CADDYFILE" 2>/dev/null || \
+           grep -q 'reverse_proxy /vls\*' "$CADDYFILE" 2>/dev/null || \
+           [ ! -s "$WORK_DIR/xray.json" ] || \
+           grep -Eq '"listen"[[:space:]]*:[[:space:]]*"(::|0\.0\.0\.0)"' "$WORK_DIR/xray.json" 2>/dev/null; then
+            REFRESH_PROXY_CONFIG=1
+        fi
+    fi
+    if (truthy "$KOMARI_DISABLE_WEB_SSH" || truthy "$KOMARI_DISABLE_REMOTE") && ! grep -q 'blockedRemote' "$CADDYFILE" 2>/dev/null; then
+        REFRESH_PROXY_CONFIG=1
+    fi
+    if [ "$KOMARI_FORCE_PUBLIC_SITE" != "0" ] && ! grep -q 'unauthEula' "$CADDYFILE" 2>/dev/null; then
+        REFRESH_PROXY_CONFIG=1
+    fi
+fi
+
+if [ "$REFRESH_PROXY_CONFIG" = "1" ]; then
+    hint "生成/刷新 Caddyfile 配置..."
+    if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
         cat > "$WORK_DIR/xray.json" << XRAY_EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "listen": "0.0.0.0",
+      "listen": "127.0.0.1",
       "port": $XRAY_VLESS_PORT,
       "protocol": "vless",
       "settings": { "clients": [{ "id": "$UUID" }], "decryption": "none" },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/vls" } }
     },
     {
-      "listen": "::",
-      "port": $XRAY_VLESS_PORT,
-      "protocol": "vless",
-      "settings": { "clients": [{ "id": "$UUID" }], "decryption": "none" },
-      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vls" } }
-    },
-    {
-      "listen": "0.0.0.0",
-      "port": $XRAY_VMESS_PORT,
-      "protocol": "vmess",
-      "settings": { "clients": [{ "id": "$UUID", "alterId": 0 }] },
-      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vms" } }
-    },
-    {
-      "listen": "::",
+      "listen": "127.0.0.1",
       "port": $XRAY_VMESS_PORT,
       "protocol": "vmess",
       "settings": { "clients": [{ "id": "$UUID", "alterId": 0 }] },
@@ -321,10 +331,16 @@ if [ ! -f "$CADDYFILE" ]; then
   "outbounds": [{ "protocol": "freedom" }]
 }
 XRAY_EOF
+    else
+        rm -f "$WORK_DIR/xray.json"
+    fi
 
-        # 生成含订阅配置的 Caddyfile
-        cat > "$CADDYFILE" << 'EOF'
+    cat > "$CADDYFILE" << 'EOF'
 :CADDY_PROXY_PORT_PLACEHOLDER {
+EOF
+
+    if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
+        cat >> "$CADDYFILE" << 'EOF'
     # 订阅链接访问 (UUID 路径)
     handle /UUID_PLACEHOLDER {
         rewrite * /list.log
@@ -334,47 +350,66 @@ XRAY_EOF
     }
 
     # VLESS WebSocket 反代
-    reverse_proxy /vls* 127.0.0.1:XRAY_VLESS_PORT_PLACEHOLDER
+    handle /vls* {
+        reverse_proxy 127.0.0.1:XRAY_VLESS_PORT_PLACEHOLDER
+    }
 
     # VMESS WebSocket 反代
-    reverse_proxy /vms* 127.0.0.1:XRAY_VMESS_PORT_PLACEHOLDER
+    handle /vms* {
+        reverse_proxy 127.0.0.1:XRAY_VMESS_PORT_PLACEHOLDER
+    }
 
-    # 默认反代到 Komari 面板
-    handle {
-        reverse_proxy localhost:25774
-    }
-}
-EOF
-        
-        hint "检测到 UUID，配置订阅链接..."
-        # 导出环境变量供 sub_link.sh 使用
-        export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP SUB_NAME
-        info "正在生成 VLESS 和 VMESS 订阅链接..."
-        bash "$SUB_LINK_SCRIPT" || error "订阅链接生成失败，请检查 UUID、ARGO_DOMAIN 或 CF_IP 配置"
-    else
-        # 无订阅配置的基础 Caddyfile
-        cat > "$CADDYFILE" << 'EOF'
-:CADDY_PROXY_PORT_PLACEHOLDER {
-    # 默认反代到 Komari 面板
-    handle {
-        reverse_proxy localhost:25774
-    }
-}
 EOF
     fi
 
-    # 替换 Caddyfile 中的占位符
+    if truthy "$KOMARI_DISABLE_WEB_SSH" || truthy "$KOMARI_DISABLE_REMOTE"; then
+        cat >> "$CADDYFILE" << 'EOF'
+    @blockedRemote path_regexp blockedRemote ^/(api/clients/terminal|api/admin/client/[^/]+/terminal|api/admin/task/exec|terminal)(/.*)?$
+    handle @blockedRemote {
+        respond 403
+    }
+
+EOF
+    fi
+
+    if [ "$KOMARI_FORCE_PUBLIC_SITE" != "0" ]; then
+        cat >> "$CADDYFILE" << 'EOF'
+    @unauthEula {
+        path /api/admin/settings /api/admin/settings/
+        not header Cookie *session_token=*
+    }
+    handle @unauthEula {
+        header Content-Type application/json
+        respond `{"status":"success","data":{"eula_accepted":true}}` 200
+    }
+
+EOF
+    fi
+
+    cat >> "$CADDYFILE" << 'EOF'
+    # 默认反代到 Komari 面板
+    handle {
+        reverse_proxy localhost:25774
+    }
+}
+EOF
+
     sed -i "s|CADDY_PROXY_PORT_PLACEHOLDER|$CADDY_PROXY_PORT|g" "$CADDYFILE"
     if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
         sed -i "s|UUID_PLACEHOLDER|$UUID|g" "$CADDYFILE"
         sed -i "s|XRAY_VLESS_PORT_PLACEHOLDER|$XRAY_VLESS_PORT|g" "$CADDYFILE"
         sed -i "s|XRAY_VMESS_PORT_PLACEHOLDER|$XRAY_VMESS_PORT|g" "$CADDYFILE"
     fi
-
     info "Caddyfile 已生成，准备启动 Caddy..."
-
 else
     hint "Caddyfile 已存在，使用现有配置"
+fi
+
+if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
+    hint "检测到 UUID，配置订阅链接..."
+    export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP SUB_HOST SUB_SNI SUB_NAME
+    info "正在生成 VLESS 和 VMESS 订阅链接..."
+    bash "$SUB_LINK_SCRIPT" || error "订阅链接生成失败，请检查 UUID、ARGO_DOMAIN、CF_IP、SUB_HOST 或 SUB_SNI 配置"
 fi
 
 # 赋执行权给所有脚本和应用
@@ -510,4 +545,3 @@ fi
 # 启动 supervisor 进程守护
 info "正在启动 Supervisor 进程管理器...."
 exec supervisord -c "$SUPERVISOR_CONF"
-

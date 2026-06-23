@@ -12,15 +12,16 @@
 #
 # 工作流程：
 #   1. 客户端 -> CF_IP:443
-#   2. Cloudflare 隧道识别 SNI 和 Host 为 ARGO_DOMAIN
-#   3. 隧道将流量转发到容器内 Caddy
+#   2. TLS SNI 使用 SUB_SNI，WebSocket Host 使用 SUB_HOST
+#   3. Cloudflare 隧道将流量转发到容器内 Caddy
 #   4. Caddy 反代到 Komari 面板、订阅文件或 Xray WS 后端
 #
 # 环境变量说明：
 #   - ARGO_DOMAIN: Cloudflare 隧道配置的域名（必需）
 #   - UUID: 订阅 UUID（必需）
 #   - CF_IP: Cloudflare 等 CDN 的优选 IP 或域名（默认 ip.sb）
-#   - CADDY_PROXY_PORT: Caddy 反向代理的内部端口（用于内部通信）
+#   - SUB_HOST: WebSocket Host，默认 ARGO_DOMAIN
+#   - SUB_SNI: TLS SNI/serverName，默认 ARGO_DOMAIN
 #===============================================================
 
 info() { echo -e "\033[32m\033[01m$*\033[0m"; }
@@ -57,12 +58,17 @@ valid_endpoint() {
     printf "%s" "$1" | grep -Eq '^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]|[0-9A-Fa-f:.]+)$'
 }
 
+json_escape() {
+    printf "%s" "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 UUID="${UUID:-}"
 ARGO_DOMAIN="${ARGO_DOMAIN:-}"
 CF_IP="${CF_IP:-ip.sb}"
+SUB_HOST="${SUB_HOST:-${ARGO_DOMAIN}}"
+SUB_SNI="${SUB_SNI:-${ARGO_DOMAIN}}"
 SUB_NAME="${SUB_NAME:-komari}"
 OUTPUT_FILE="${OUTPUT_FILE:-/tmp/list.log}"
-CADDY_PROXY_PORT="${CADDY_PROXY_PORT:-8001}"
 
 if [ -z "$UUID" ]; then
     hint "UUID 未设置，跳过生成订阅链接"
@@ -80,19 +86,24 @@ if ! valid_endpoint "$ARGO_DOMAIN"; then
     error "ARGO_DOMAIN 格式不正确，无法生成订阅链接"
 fi
 
-if ! valid_endpoint "$CF_IP"; then
-    error "CF_IP 格式不正确，无法生成订阅链接"
-fi
+for endpoint_var in CF_IP SUB_HOST SUB_SNI; do
+    endpoint_value="${!endpoint_var:-}"
+    if [ -z "$endpoint_value" ] || ! valid_endpoint "$endpoint_value"; then
+        error "$endpoint_var 格式不正确，无法生成订阅链接"
+    fi
+done
 
 COUNTRY_CODE=$(get_country_code)
 info "检测到国家代码: $COUNTRY_CODE"
 
-XIEYI='vl'
-XIEYI2='vm'
+NODE_PREFIX="${COUNTRY_CODE}-${SUB_NAME}"
+NODE_PREFIX_JSON=$(json_escape "$NODE_PREFIX")
+VLESS_PATH_ENCODED="%2Fvls%3Fed%3D2048"
+VMESS_PATH="/vms?ed=2048"
 
-VLESS_URL="vless://${UUID}@${CF_IP}:443?path=%2F${XIEYI}s%3Fed%3D2048&security=tls&encryption=none&host=${ARGO_DOMAIN}&type=ws&sni=${ARGO_DOMAIN}#${COUNTRY_CODE}-${SUB_NAME}-${XIEYI}"
+VLESS_URL="vless://${UUID}@${CF_IP}:443?encryption=none&security=tls&sni=${SUB_SNI}&fp=randomized&alpn=http%2F1.1&type=ws&host=${SUB_HOST}&path=${VLESS_PATH_ENCODED}#${NODE_PREFIX}-vl"
 
-VMESS_JSON="{ \"v\": \"2\", \"ps\": \"${COUNTRY_CODE}-${SUB_NAME}-${XIEYI2}\", \"add\": \"${CF_IP}\", \"port\": \"443\", \"id\": \"${UUID}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"none\", \"host\": \"${ARGO_DOMAIN}\", \"path\": \"/vms?ed=2048\", \"tls\": \"tls\", \"sni\": \"${ARGO_DOMAIN}\", \"alpn\": \"\", \"fp\": \"randomized\", \"allowInsecure\": \"false\"}"
+VMESS_JSON="{ \"v\": \"2\", \"ps\": \"${NODE_PREFIX_JSON}-vm\", \"add\": \"${CF_IP}\", \"port\": \"443\", \"id\": \"${UUID}\", \"aid\": \"0\", \"scy\": \"auto\", \"net\": \"ws\", \"type\": \"none\", \"host\": \"${SUB_HOST}\", \"path\": \"${VMESS_PATH}\", \"tls\": \"tls\", \"sni\": \"${SUB_SNI}\", \"servername\": \"${SUB_SNI}\", \"alpn\": \"http/1.1\", \"fp\": \"randomized\", \"allowInsecure\": false }"
 
 if ! command -v base64 >/dev/null 2>&1; then
     error "base64 命令不可用，无法生成订阅链接"

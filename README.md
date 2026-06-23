@@ -132,6 +132,8 @@ services:
       # 节点订阅配置（设置 UUID 才启用）
       UUID: "你自己的UUID"
       CF_IP: "ip.sb"
+      SUB_HOST: ""
+      SUB_SNI: ""
       SUB_NAME: "komari"
 
     volumes:
@@ -170,6 +172,9 @@ environment:
 
   # 节点订阅（可选，设置 UUID 才启用）
   UUID: ""                            # 改为你的 UUID 以启用订阅
+  CF_IP: "ip.sb"                       # 连接地址，可填优选 IP/域名
+  SUB_HOST: ""                         # 留空使用 ARGO_DOMAIN
+  SUB_SNI: ""                          # 留空使用 ARGO_DOMAIN
 ```
 
 ##### 启动容器
@@ -221,6 +226,8 @@ docker run -d \
   -e KOMARI_DISABLE_REMOTE="1" \
   -e UUID="" \
   -e CF_IP="ip.sb" \
+  -e SUB_HOST="" \
+  -e SUB_SNI="" \
   -e SUB_NAME="komari" \
   -v ~/komari-data:/app/data \
   ghcr.io/jyucoeng/komari:latest
@@ -281,8 +288,12 @@ docker run -d \
 | 环境变量 | 说明 | 默认值 | 示例值 |
 |---|---|---|---|
 | `UUID` | 订阅 UUID（为空则不启用订阅） | - | `550e8400-e29b-41d4-a716-446655440000` |
-| `CF_IP` | CDN 优选 IP 或域名 | `ip.sb` |  `saas.sin.fan` |
+| `CF_IP` | 连接地址，可填 CDN 优选 IP 或域名 | `ip.sb` | `saas.sin.fan` |
+| `SUB_HOST` | WebSocket Host，留空使用 `ARGO_DOMAIN` | `ARGO_DOMAIN` | `komari.example.com` |
+| `SUB_SNI` | TLS SNI/serverName，留空使用 `ARGO_DOMAIN` | `ARGO_DOMAIN` | `komari.example.com` |
 | `SUB_NAME` | 订阅名称 | `komari` | `MyProxy` |
+
+`CF_IP` 只决定客户端连接入口；`SUB_HOST` 和 `SUB_SNI` 决定 Cloudflare 隧道识别的域名。使用优选域名/IP 时，通常只改 `CF_IP`，`SUB_HOST`/`SUB_SNI` 留空即可。
 
 ##### 查看日志
 
@@ -627,6 +638,8 @@ docker run -d \
   -e KOMARI_DISABLE_REMOTE="1" \
   -e UUID="" \
   -e CF_IP="ip.sb" \
+  -e SUB_HOST="" \
+  -e SUB_SNI="" \
   -e SUB_NAME="komari" \
   -v ~/komari-data:/app/data \
   ghcr.io/jyucoeng/komari:latest
@@ -893,8 +906,12 @@ tar czf ~/komari-backup-$(date +%Y%m%d).tar.gz /opt/komari/data
 | 变量 | 说明 | 示例 |
 |---|---|---|
 | `UUID` | 订阅 UUID | `550e8400-e29b-41d4-a716-446655440000` |
-| `CF_IP` | CDN 优选 IP 或域名 | `ip.sb` |
+| `CF_IP` | 连接地址，可填 CDN 优选 IP 或域名 | `ip.sb` |
+| `SUB_HOST` | WebSocket Host，留空使用 `ARGO_DOMAIN` | `komari.example.com` |
+| `SUB_SNI` | TLS SNI/serverName，留空使用 `ARGO_DOMAIN` | `komari.example.com` |
 | `SUB_NAME` | 订阅名称 | `komari` |
+
+`CF_IP` 只改连接入口；除非明确需要覆盖 Host/SNI，否则 `SUB_HOST` 和 `SUB_SNI` 留空。
 
 #### 其他配置
 
@@ -993,5 +1010,3 @@ ps aux | grep xray
 
 - https://github.com/komari-monitor/komari
 - https://github.com/yutian81/komari-backup
-
-

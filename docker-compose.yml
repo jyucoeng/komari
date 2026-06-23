@@ -42,6 +42,8 @@ services:
       # 节点订阅配置（只有设置 UUID 时才启用订阅功能）
       UUID: "${UUID:-}"
       CF_IP: "${CF_IP:-ip.sb}"
+      SUB_HOST: "${SUB_HOST:-}"
+      SUB_SNI: "${SUB_SNI:-}"
       SUB_NAME: "${SUB_NAME:-komari}"
 
     volumes:
