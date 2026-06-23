@@ -281,25 +281,37 @@ rm -f /usr/local/bin/cloudflared /usr/bin/cloudflared
 # 生成 Caddyfile（如果不存在则创建，否则使用现有配置）
 if [ ! -f "$CADDYFILE" ]; then
     hint "生成新的 Caddyfile 配置..."
-    cat > "$CADDYFILE" << 'EOF'
-:CADDY_PROXY_PORT_PLACEHOLDER {
-EOF
-
-# 如果设置了 UUID，配置节点订阅反代
-if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
-    cat > "$WORK_DIR/xray.json" << XRAY_EOF
+    
+    # 如果设置了 UUID，配置节点订阅反代
+    if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
+        # 生成 Xray 配置文件
+        cat > "$WORK_DIR/xray.json" << XRAY_EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "listen": "127.0.0.1",
+      "listen": "0.0.0.0",
       "port": $XRAY_VLESS_PORT,
       "protocol": "vless",
       "settings": { "clients": [{ "id": "$UUID" }], "decryption": "none" },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/vls" } }
     },
     {
-      "listen": "127.0.0.1",
+      "listen": "::",
+      "port": $XRAY_VLESS_PORT,
+      "protocol": "vless",
+      "settings": { "clients": [{ "id": "$UUID" }], "decryption": "none" },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vls" } }
+    },
+    {
+      "listen": "0.0.0.0",
+      "port": $XRAY_VMESS_PORT,
+      "protocol": "vmess",
+      "settings": { "clients": [{ "id": "$UUID", "alterId": 0 }] },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vms" } }
+    },
+    {
+      "listen": "::",
       "port": $XRAY_VMESS_PORT,
       "protocol": "vmess",
       "settings": { "clients": [{ "id": "$UUID", "alterId": 0 }] },
@@ -310,7 +322,9 @@ if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
 }
 XRAY_EOF
 
-    cat >> "$CADDYFILE" << 'EOF'
+        # 生成含订阅配置的 Caddyfile
+        cat > "$CADDYFILE" << 'EOF'
+:CADDY_PROXY_PORT_PLACEHOLDER {
     # 订阅链接访问 (UUID 路径)
     handle /UUID_PLACEHOLDER {
         rewrite * /list.log
@@ -319,51 +333,45 @@ XRAY_EOF
         }
     }
 
+    # VLESS WebSocket 反代
     reverse_proxy /vls* 127.0.0.1:XRAY_VLESS_PORT_PLACEHOLDER
+
+    # VMESS WebSocket 反代
     reverse_proxy /vms* 127.0.0.1:XRAY_VMESS_PORT_PLACEHOLDER
 
-EOF
-    hint "检测到 UUID，配置订阅链接..."
-    # 导出环境变量供 sub_link.sh 使用
-    export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP SUB_NAME
-    info "正在生成 VLESS 和 VMESS 订阅链接..."
-    bash "$SUB_LINK_SCRIPT" || error "订阅链接生成失败，请检查 UUID、ARGO_DOMAIN 或 CF_IP 配置"
-fi
-
-# 添加默认反代到 Komari 面板
-if truthy "$KOMARI_DISABLE_WEB_SSH" || truthy "$KOMARI_DISABLE_REMOTE"; then
-    cat >> "$CADDYFILE" << 'EOF'
-    @blockedRemote path_regexp blockedRemote ^/(api/clients/terminal|api/admin/client/[^/]+/terminal|api/admin/task/exec|terminal)(/.*)?$
-    respond @blockedRemote 403
-
-EOF
-fi
-
-cat >> "$CADDYFILE" << 'EOF'
-    # 绕过前端 EULA 弹窗 Bug（未登录时 /api/admin/settings 返回 401 导致前端误判弹窗）
-    @unauthEula {
-        path /api/admin/settings /api/admin/settings/
-        not header Cookie *session_token=*
-    }
-    handle @unauthEula {
-        header Content-Type application/json
-        respond `{"status":"success","data":{"eula_accepted":true}}` 200
-    }
-
-    # 反代到 Komari 面板（默认路由）
+    # 默认反代到 Komari 面板
     handle {
         reverse_proxy localhost:25774
     }
 }
 EOF
+        
+        hint "检测到 UUID，配置订阅链接..."
+        # 导出环境变量供 sub_link.sh 使用
+        export UUID CADDY_PROXY_PORT ARGO_DOMAIN CF_IP SUB_NAME
+        info "正在生成 VLESS 和 VMESS 订阅链接..."
+        bash "$SUB_LINK_SCRIPT" || error "订阅链接生成失败，请检查 UUID、ARGO_DOMAIN 或 CF_IP 配置"
+    else
+        # 无订阅配置的基础 Caddyfile
+        cat > "$CADDYFILE" << 'EOF'
+:CADDY_PROXY_PORT_PLACEHOLDER {
+    # 默认反代到 Komari 面板
+    handle {
+        reverse_proxy localhost:25774
+    }
+}
+EOF
+    fi
 
-# 替换占位符
-sed -i "s|CADDY_PROXY_PORT_PLACEHOLDER|$CADDY_PROXY_PORT|g" "$CADDYFILE"
-sed -i "s|UUID_PLACEHOLDER|$UUID|g" "$CADDYFILE"
-sed -i "s|XRAY_VLESS_PORT_PLACEHOLDER|$XRAY_VLESS_PORT|g" "$CADDYFILE"
-sed -i "s|XRAY_VMESS_PORT_PLACEHOLDER|$XRAY_VMESS_PORT|g" "$CADDYFILE"
+    # 替换 Caddyfile 中的占位符
+    sed -i "s|CADDY_PROXY_PORT_PLACEHOLDER|$CADDY_PROXY_PORT|g" "$CADDYFILE"
+    if [ -n "$UUID" ] && [ "$UUID" != "0" ]; then
+        sed -i "s|UUID_PLACEHOLDER|$UUID|g" "$CADDYFILE"
+        sed -i "s|XRAY_VLESS_PORT_PLACEHOLDER|$XRAY_VLESS_PORT|g" "$CADDYFILE"
+        sed -i "s|XRAY_VMESS_PORT_PLACEHOLDER|$XRAY_VMESS_PORT|g" "$CADDYFILE"
+    fi
 
-info "Caddyfile 已生成，准备启动 Caddy..."
+    info "Caddyfile 已生成，准备启动 Caddy..."
 
 else
     hint "Caddyfile 已存在，使用现有配置"
@@ -500,5 +508,6 @@ fi
 fi
 
 # 启动 supervisor 进程守护
-info "正在启动 Supervisor 进程管理器..."
+info "正在启动 Supervisor 进程管理器...."
 exec supervisord -c "$SUPERVISOR_CONF"
+

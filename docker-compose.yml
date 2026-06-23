@@ -1,6 +1,6 @@
 services:
   komari:
-    image: "${KOMARI_IMAGE:-ghcr.io/hynize/komari:latest}"
+    image: "${KOMARI_IMAGE:-ghcr.io/jyucoeng/komari:latest}"
     container_name: komari
     restart: unless-stopped
     ports:
