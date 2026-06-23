@@ -243,13 +243,25 @@ snapshot_sqlite_files() {
         rm -f "$check_file" "$tmp_db"
 
         quoted_tmp=$(sqlite_quote "$tmp_db")
-        if sqlite3 "$db_file" "VACUUM INTO '$quoted_tmp';" >/dev/null 2>&1; then
+        snapshot_ok=0
+        # komari 运行时可能短暂持有数据库锁，VACUUM INTO 偶发 SQLITE_BUSY，重试几次。
+        for _ in 1 2 3 4 5; do
+            if sqlite3 "$db_file" "VACUUM INTO '$quoted_tmp';" >/dev/null 2>&1 && [ -f "$tmp_db" ]; then
+                snapshot_ok=1
+                break
+            fi
+            rm -f "$tmp_db" 2>/dev/null || true
+            sleep 1
+        done
+        if [ "$snapshot_ok" = "1" ]; then
             mv -f "$tmp_db" "$staged_db"
             rm -f "${staged_db}-wal" "${staged_db}-shm" "${staged_db}-journal"
             hint "已生成 SQLite 一致性快照: $rel_path"
         else
-            rm -f "$tmp_db"
-            error "SQLite 数据库快照失败，已停止备份: $rel_path"
+            rm -f "$tmp_db" 2>/dev/null || true
+            # VACUUM INTO 失败（通常是数据库被持续占用），退回到已复制的普通文件快照，
+            # 避免因单个数据库锁定而中断整次备份。
+            hint "SQLite 一致性快照失败，使用普通文件快照: $rel_path"
         fi
     done < <(find "$DATA_DIR" -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) -print)
 }
@@ -384,7 +396,11 @@ do_backup() {
     fi
 
     if git ls-remote --exit-code --heads origin "$GH_BACKUP_BRANCH" >/dev/null 2>&1; then
-        git pull --rebase origin "$GH_BACKUP_BRANCH" || error "同步远程备份仓库失败。"
+        # 多节点共享同一备份仓库时，每次备份都会改写 README.md 第一行，
+        # 普通的 pull --rebase 会因 README 冲突而中断备份。
+        # 使用 -X theirs 让本次（最新）备份的 README 胜出；
+        # 各节点的 tar.gz 文件名含时间戳、互不冲突，会被正常合并保留。
+        git pull --rebase -X theirs origin "$GH_BACKUP_BRANCH" || error "同步远程备份仓库失败。"
     fi
 
     if git push -u origin "$GH_BACKUP_BRANCH"; then

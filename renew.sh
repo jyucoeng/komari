@@ -192,17 +192,16 @@ main() {
     local updated=0
 
     # 下载脚本
-    download_script "repo.conf"
+    # 注意：repo.conf 不再自动更新——它包含 fork 用户需要定制的仓库源
+    # (KOMARI_PROJECT_OWNER / KOMARI_PROJECT_NAME / KOMARI_SOURCE_REPOSITORY)，
+    # 自动覆盖会把用户改好的 owner 还原成上游默认值，导致脚本自动更新源错乱。
+    # repo.conf 由安装时写入，之后由用户自行管理。
     download_script "backup.sh"
     download_script "restore.sh"
     download_script "renew.sh"
     download_script "sub_link.sh"
 
     # 更新脚本
-    if update_script "repo.conf"; then
-        ((updated++))
-    fi
-
     if update_script "backup.sh"; then
         ((updated++))
     fi

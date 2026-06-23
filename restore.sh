@@ -269,11 +269,16 @@ readme_command_or_file() {
 metadata_from_readme() {
     local filename file_meta sha256 size
     filename=$(readme_restore_filename) || return 1
-    file_meta=$(get_file_metadata_direct "$filename") || return 1
-    sha256=$(printf "%s" "$file_meta" | awk '{print $2}')
-    size=$(printf "%s" "$file_meta" | awk '{print $3}')
-    if valid_backup_filename "$filename" && valid_size "$size"; then
-        printf '%s %s %s\n' "$filename" "${sha256:-unknown}" "$size"
+    sha256="unknown"
+    size="0"
+    # 文件元数据查询失败（API 限流 / 网络抖动 / 文件刚推送尚未一致）时，
+    # 退化为只返回文件名，让下载后的 sha256/大小校验兜底，不阻断自动还原。
+    if file_meta=$(get_file_metadata_direct "$filename" 2>/dev/null) && [ -n "$file_meta" ]; then
+        sha256=$(printf "%s" "$file_meta" | awk '{print $2}')
+        size=$(printf "%s" "$file_meta" | awk '{print $3}')
+    fi
+    if valid_backup_filename "$filename"; then
+        printf '%s %s %s\n' "$filename" "${sha256:-unknown}" "${size:-0}"
         return 0
     fi
     return 1
@@ -301,7 +306,12 @@ read_index_metadata() {
 }
 
 read_latest_metadata() {
-    read_index_metadata
+    if read_index_metadata; then
+        return 0
+    fi
+    # README 指针解析失败（格式不符、API 限流、网络抖动）时，回退到列出备份仓库中
+    # 最新的 komari-*.tar.gz，避免自动还原彻底失效。
+    get_latest_backup_from_listing
 }
 
 get_latest_backup_from_listing() {
