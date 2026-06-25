@@ -186,6 +186,12 @@ valid_cron_expr() {
     [ "$field_count" = "5" ]
 }
 
+normalize_cron_expr() {
+    local expr="$1"
+    expr=$(printf '%s' "$expr" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//;s/^\"\(.*\)\"$/\1/;s/^'\(.*\)'$/\1/")
+    printf '%s\n' "$expr" | awk '{$1=$1; print}'
+}
+
 # ---- Detection ---------------------------------------------------------------
 detect_installed() {
     if [ -d "$WORK_DIR" ]; then
@@ -296,8 +302,9 @@ docker_install() {
         fi
         echo ""
         hint "IMPORTANT: Please edit ${SCRIPT_SOURCE_DIR}/.env with your actual configuration values."
-        hint "Required fields: GH_BACKUP_USER, GH_REPO, GH_PAT, GH_EMAIL, ADMIN_USERNAME,"
+        hint "Required fields: GH_BACKUP_USER, GH_REPO, GH_PAT, ADMIN_USERNAME,"
         hint "ADMIN_PASSWORD, ARGO_DOMAIN, KOMARI_CLOUDFLARED_TOKEN"
+        hint "Optional: GH_EMAIL defaults to GH_BACKUP_USER@users.noreply.github.com"
         echo ""
         if confirm "Open the .env file for editing now?"; then
             ${EDITOR:-vi} "${SCRIPT_SOURCE_DIR}/.env"
@@ -830,7 +837,8 @@ ENVEOF
     echo ""
     hint "============================================"
     hint "  IMPORTANT: Edit ${env_file}"
-    hint "  Required: GH_BACKUP_USER, GH_REPO, GH_PAT, GH_EMAIL"
+    hint "  Required: GH_BACKUP_USER, GH_REPO, GH_PAT"
+    hint "  Optional: GH_EMAIL defaults to GH_BACKUP_USER@users.noreply.github.com"
     hint "  Required: ADMIN_USERNAME, ADMIN_PASSWORD"
     hint "  Required: ARGO_DOMAIN, KOMARI_CLOUDFLARED_TOKEN"
     hint "============================================"
@@ -976,6 +984,8 @@ vps_setup_cron() {
     if [ -f "$env_file" ]; then
         . "$env_file"
     fi
+    BACKUP_TIME=$(normalize_cron_expr "${BACKUP_TIME:-0 20 * * *}")
+    GH_EMAIL=${GH_EMAIL:-"${GH_BACKUP_USER}@users.noreply.github.com"}
     if ! valid_cron_expr "$BACKUP_TIME"; then
         fatal "BACKUP_TIME must be a 5-field cron expression, for example: 0 */1 * * *"
     fi

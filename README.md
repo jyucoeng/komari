@@ -346,6 +346,7 @@ backup now
 服务启动时自动执行备份。
 
 定时备份每次成功运行都会生成新的 `komari-*.tar.gz` 并更新备份库 README；不会因为数据未变化就跳过提交。`BACKUP_TIME` 使用 UTC，例如 `0 */8 * * *` 对应北京时间 08:00、16:00、00:00。
+分钟级表达式也支持，例如 `*/10 * * * *` 表示每 10 分钟执行一次；部署平台里如果给表达式加了外层引号，容器启动时会自动清理后再写入 crontab。
 
 ---
 
@@ -383,6 +384,7 @@ docker exec komari /app/restore.sh f
 
 ```bash
 docker exec komari cat /etc/crontabs/root
+docker exec komari supervisorctl -c /etc/supervisor.d/damon.conf status cron
 docker exec komari tail -f /tmp/backup.log
 docker exec komari tail -f /tmp/restore-cron.log
 ```
@@ -709,7 +711,6 @@ sudo systemctl daemon-reload
 | `GH_REPO` | 备份仓库名（建议私有） | `komari` |
 | `GH_BACKUP_BRANCH` | 备份分支 | `main` |
 | `GH_PAT` | GitHub Personal Access Token | `ghp_xxxxx` |
-| `GH_EMAIL` | Git 提交邮箱 | `user@example.com` |
 
 ---
 
@@ -745,6 +746,7 @@ https://komari.example.com/550e8400-e29b-41d4-a716-446655440000
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `BACKUP_TIME` | `0 20 * * *` | UTC cron 表达式；`0 */8 * * *` 对应北京时间 08:00/16:00/00:00 |
+| `GH_EMAIL` | `${GH_BACKUP_USER}@users.noreply.github.com` | Git 提交邮箱，可不填 |
 | `BACKUP_DAYS` | `10` | 备份保留天数 |
 | `CADDY_PROXY_PORT` | `8001` | Caddy 监听端口 |
 | `KOMARI_DISABLE_WEB_SSH` | `1` | 设为 `0` 启用 Web SSH |

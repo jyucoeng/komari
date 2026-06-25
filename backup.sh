@@ -61,7 +61,10 @@ GH_BACKUP_USER="${GH_BACKUP_USER:-your_github_username}"
 GH_REPO="${GH_REPO:-your_private_repo_name}"
 GH_BACKUP_BRANCH="${GH_BACKUP_BRANCH:-main}"
 GH_PAT="${GH_PAT:-your_github_personal_access_token}"
-GH_EMAIL="${GH_EMAIL:-your_github_email@example.com}"
+GH_EMAIL="${GH_EMAIL:-}"
+if [ -z "$GH_EMAIL" ] || [ "$GH_EMAIL" = "your_github_email@example.com" ]; then
+    GH_EMAIL="${GH_BACKUP_USER}@users.noreply.github.com"
+fi
 
 #---------------------------------------------------------------
 # 备份相关配置

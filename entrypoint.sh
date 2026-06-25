@@ -39,11 +39,10 @@ reject_placeholder() {
 }
 
 valid_backup_env() {
-    [ -n "${GH_BACKUP_USER:-}" ] && [ -n "${GH_REPO:-}" ] && [ -n "${GH_PAT:-}" ] && [ -n "${GH_EMAIL:-}" ] &&
+    [ -n "${GH_BACKUP_USER:-}" ] && [ -n "${GH_REPO:-}" ] && [ -n "${GH_PAT:-}" ] &&
     [ "${GH_BACKUP_USER:-}" != "your_github_username" ] &&
     [ "${GH_REPO:-}" != "your_private_repo_name" ] &&
-    [ "${GH_PAT:-}" != "your_github_personal_access_token" ] &&
-    [ "${GH_EMAIL:-}" != "your_github_email@example.com" ]
+    [ "${GH_PAT:-}" != "your_github_personal_access_token" ]
 }
 
 valid_cron_expr() {
@@ -52,6 +51,12 @@ valid_cron_expr() {
     printf "%s" "$expr" | grep -q '[[:cntrl:]]' && return 1
     field_count=$(printf "%s\n" "$expr" | awk '{print NF; exit}')
     [ "$field_count" = "5" ]
+}
+
+normalize_cron_expr() {
+    local expr="$1"
+    expr=$(printf '%s' "$expr" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//;s/^\"\(.*\)\"$/\1/;s/^'\(.*\)'$/\1/")
+    printf '%s\n' "$expr" | awk '{$1=$1; print}'
 }
 
 shell_quote() {
@@ -108,12 +113,15 @@ done
 BACKUP_ENABLED=0
 if valid_backup_env; then
     BACKUP_ENABLED=1
+    if [ -z "${GH_EMAIL:-}" ] || [ "${GH_EMAIL:-}" = "your_github_email@example.com" ]; then
+        GH_EMAIL="${GH_BACKUP_USER}@users.noreply.github.com"
+    fi
 else
     hint "GitHub 备份变量未完整配置，自动备份和自动还原将不会启用。"
 fi
 
 # 设置备份相关的环境变量默认值（使用 UTC 时间）
-BACKUP_TIME=${BACKUP_TIME:-"0 20 * * *"}
+BACKUP_TIME=$(normalize_cron_expr "${BACKUP_TIME:-0 20 * * *}")
 if ! valid_cron_expr "$BACKUP_TIME"; then
     error "错误：BACKUP_TIME 必须是 5 段 cron 表达式，例如 '0 */1 * * *'"
 fi
@@ -209,8 +217,7 @@ write_cron_config() {
 # 每次容器启动都刷新 cron 配置，避免环境变量变更后继续沿用旧任务。
 write_cron_config
 
-# 首次运行时执行以下流程，再次运行时存在 damon.conf 文件，直接到最后一步
-if [ ! -s "$SUPERVISOR_CONF" ]; then
+# 每次启动都刷新运行配置，避免旧容器继续沿用缺少 cron 或参数过期的 Supervisor 配置。
 
 # 处理 KOMARI_CLOUDFLARED_TOKEN 格式（JSON 或 Token）
 if [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ TunnelSecret ]]; then
@@ -570,8 +577,6 @@ if [ -n "${UUID:-}" ] && [ "$UUID" != "0" ]; then
     sed -i "s|XRAY_AUTOSTART_PLACEHOLDER|true|g" "$SUPERVISOR_CONF"
 else
     sed -i "s|XRAY_AUTOSTART_PLACEHOLDER|false|g" "$SUPERVISOR_CONF"
-fi
-
 fi
 
 # 启动 supervisor 进程守护

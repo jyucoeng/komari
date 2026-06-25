@@ -21,7 +21,7 @@ services:
       GH_REPO: "${GH_REPO:?set GH_REPO in .env}"
       GH_BACKUP_BRANCH: "${GH_BACKUP_BRANCH:-main}"
       GH_PAT: "${GH_PAT:?set GH_PAT in .env}"
-      GH_EMAIL: "${GH_EMAIL:?set GH_EMAIL in .env}"
+      GH_EMAIL: "${GH_EMAIL:-}"
 
       # ===== 可选配置 =====
 
