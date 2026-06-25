@@ -688,20 +688,9 @@ do_restore() {
     log "备份文件已成功还原: $backup_file sha256=$actual_sha256"
 }
 
-auto_restore() {
-    local latest_state latest_file latest_sha256 latest_size last_state last_file last_sha256 is_new_backup
-
-    check_env
-    maybe_trigger_backup_from_readme
-    acquire_lock
-
-    if ! latest_state=$(read_latest_metadata); then
-        error "README.md 中没有有效的备份文件名，拒绝还原。"
-    fi
-    if [ -z "$latest_state" ]; then
-        log "README.md 中没有有效的备份文件名"
-        exit 0
-    fi
+evaluate_auto_restore_target() {
+    local latest_state="$1"
+    local latest_file latest_sha256 latest_size last_state last_file last_sha256 is_new_backup
 
     latest_file=$(printf "%s" "$latest_state" | awk '{print $1}')
     latest_sha256=$(printf "%s" "$latest_state" | awk '{print $2}')
@@ -729,13 +718,51 @@ auto_restore() {
         log "本地还原记录存在，但数据目录不可用，重新执行还原: $latest_file"
     fi
 
-    if [ "$is_new_backup" = "true" ]; then
-        info "检测到新的备份文件: $latest_file"
-        log "检测到新的备份文件: $latest_file sha256=$latest_sha256"
-        do_restore "$latest_file" "$latest_sha256" "$latest_size"
-    else
-        log "本地与远程备份状态一致，无需还原"
+    AUTO_RESTORE_NEEDED="$is_new_backup"
+    AUTO_RESTORE_FILE="$latest_file"
+    AUTO_RESTORE_SHA256="$latest_sha256"
+    AUTO_RESTORE_SIZE="${latest_size:-0}"
+}
+
+auto_restore() {
+    local latest_state
+
+    check_env
+    maybe_trigger_backup_from_readme
+
+    if ! latest_state=$(read_latest_metadata); then
+        error "README.md 中没有有效的备份文件名，拒绝还原。"
     fi
+    if [ -z "$latest_state" ]; then
+        log "README.md 中没有有效的备份文件名"
+        exit 0
+    fi
+
+    evaluate_auto_restore_target "$latest_state"
+    if [ "$AUTO_RESTORE_NEEDED" != "true" ]; then
+        log "本地与远程备份状态一致，无需还原"
+        exit 0
+    fi
+
+    acquire_lock
+
+    if ! latest_state=$(read_latest_metadata); then
+        error "README.md 中没有有效的备份文件名，拒绝还原。"
+    fi
+    if [ -z "$latest_state" ]; then
+        log "README.md 中没有有效的备份文件名"
+        exit 0
+    fi
+
+    evaluate_auto_restore_target "$latest_state"
+    if [ "$AUTO_RESTORE_NEEDED" != "true" ]; then
+        log "锁定后复核发现无需还原，本次跳过"
+        exit 0
+    fi
+
+    info "检测到新的备份文件: $AUTO_RESTORE_FILE"
+    log "检测到新的备份文件: $AUTO_RESTORE_FILE sha256=$AUTO_RESTORE_SHA256"
+    do_restore "$AUTO_RESTORE_FILE" "$AUTO_RESTORE_SHA256" "$AUTO_RESTORE_SIZE"
 }
 
 manual_restore() {

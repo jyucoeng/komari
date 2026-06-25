@@ -20,9 +20,6 @@ CADDYFILE="/app/Caddyfile"
 SUPERVISOR_CONF="/etc/supervisor.d/damon.conf"
 WORK_DIR="/app"
 
-# 首次运行时执行以下流程，再次运行时存在 damon.conf 文件，直接到最后一步
-if [ ! -s "$SUPERVISOR_CONF" ]; then
-
 require_env() {
     local name="$1"
     local value="${!name:-}"
@@ -74,6 +71,11 @@ truthy() {
     esac
 }
 
+write_cron_env_var() {
+    local name="$1"
+    printf 'export %s=%s\n' "$name" "$(shell_quote "${!name:-}")"
+}
+
 if [ -f "$REPO_CONF" ]; then
     . "$REPO_CONF"
 fi
@@ -115,9 +117,14 @@ BACKUP_TIME=${BACKUP_TIME:-"0 20 * * *"}
 if ! valid_cron_expr "$BACKUP_TIME"; then
     error "错误：BACKUP_TIME 必须是 5 段 cron 表达式，例如 '0 */1 * * *'"
 fi
+GH_BACKUP_BRANCH=${GH_BACKUP_BRANCH:-main}
 BACKUP_DAYS=${BACKUP_DAYS:-"10"}
 if ! echo "$BACKUP_DAYS" | grep -Eq '^[1-9][0-9]*$'; then
     error "错误：BACKUP_DAYS 必须是大于等于 1 的整数"
+fi
+KOMARI_LOCK_TIMEOUT_SECONDS=${KOMARI_LOCK_TIMEOUT_SECONDS:-60}
+if ! echo "$KOMARI_LOCK_TIMEOUT_SECONDS" | grep -Eq '^[0-9]+$'; then
+    error "错误：KOMARI_LOCK_TIMEOUT_SECONDS 必须是非负整数"
 fi
 
 # 配置 Caddy 端口
@@ -140,45 +147,70 @@ else
     CADDY_LATEST=2.9.1
 fi
 
-echo "#!/usr/bin/env bash" > "$CRON_ENV_FILE"
-echo "export GH_BACKUP_USER=\"$GH_BACKUP_USER\"" >> "$CRON_ENV_FILE"
-echo "export GH_REPO=\"$GH_REPO\"" >> "$CRON_ENV_FILE"
-echo "export GH_BACKUP_BRANCH=\"$GH_BACKUP_BRANCH\"" >> "$CRON_ENV_FILE"
-echo "export GH_PAT=\"$GH_PAT\"" >> "$CRON_ENV_FILE"
-echo "export GH_EMAIL=\"$GH_EMAIL\"" >> "$CRON_ENV_FILE"
-echo "export BACKUP_DAYS=\"$BACKUP_DAYS\"" >> "$CRON_ENV_FILE"
-echo "export KOMARI_LOCK_TIMEOUT_SECONDS=\"$KOMARI_LOCK_TIMEOUT_SECONDS\"" >> "$CRON_ENV_FILE"
-echo "export TZ=\"$TZ\"" >> "$CRON_ENV_FILE"
-echo "export KOMARI_SOURCE_REPOSITORY=\"$KOMARI_SOURCE_REPOSITORY\"" >> "$CRON_ENV_FILE"
-echo "export KOMARI_SOURCE_BRANCH=\"$KOMARI_SOURCE_BRANCH\"" >> "$CRON_ENV_FILE"
-echo "export KOMARI_PROJECT_OWNER=\"$KOMARI_PROJECT_OWNER\"" >> "$CRON_ENV_FILE"
-echo "export KOMARI_PROJECT_NAME=\"$KOMARI_PROJECT_NAME\"" >> "$CRON_ENV_FILE"
-echo "export UUID=\"$UUID\"" >> "$CRON_ENV_FILE"
-echo "export ARGO_DOMAIN=\"$ARGO_DOMAIN\"" >> "$CRON_ENV_FILE"
-echo "export CF_IP=\"$CF_IP\"" >> "$CRON_ENV_FILE"
-echo "export SUB_HOST=\"$SUB_HOST\"" >> "$CRON_ENV_FILE"
-echo "export SUB_SNI=\"$SUB_SNI\"" >> "$CRON_ENV_FILE"
-echo "export SUB_NAME=\"$SUB_NAME\"" >> "$CRON_ENV_FILE"
-echo "export CADDY_PROXY_PORT=\"$CADDY_PROXY_PORT\"" >> "$CRON_ENV_FILE"
-echo "export XRAY_VLESS_PORT=\"$XRAY_VLESS_PORT\"" >> "$CRON_ENV_FILE"
-echo "export XRAY_VMESS_PORT=\"$XRAY_VMESS_PORT\"" >> "$CRON_ENV_FILE"
-echo "export KOMARI_FORCE_PUBLIC_SITE=\"$KOMARI_FORCE_PUBLIC_SITE\"" >> "$CRON_ENV_FILE"
-chmod 600 "$CRON_ENV_FILE"
+write_cron_config() {
+    mkdir -p "$(dirname "$CRON_ENV_FILE")" "$CRONTAB_DIR"
+    {
+        printf '#!/usr/bin/env bash\n'
+        write_cron_env_var GH_BACKUP_USER
+        write_cron_env_var GH_REPO
+        write_cron_env_var GH_BACKUP_BRANCH
+        write_cron_env_var GH_PAT
+        write_cron_env_var GH_EMAIL
+        write_cron_env_var BACKUP_TIME
+        write_cron_env_var BACKUP_DAYS
+        write_cron_env_var KOMARI_LOCK_TIMEOUT_SECONDS
+        write_cron_env_var NO_AUTO_RENEW
+        write_cron_env_var TZ
+        write_cron_env_var KOMARI_SOURCE_REPOSITORY
+        write_cron_env_var KOMARI_SOURCE_BRANCH
+        write_cron_env_var KOMARI_PROJECT_OWNER
+        write_cron_env_var KOMARI_PROJECT_NAME
+        write_cron_env_var UUID
+        write_cron_env_var ARGO_DOMAIN
+        write_cron_env_var CF_IP
+        write_cron_env_var SUB_HOST
+        write_cron_env_var SUB_SNI
+        write_cron_env_var SUB_NAME
+        write_cron_env_var CADDY_PROXY_PORT
+        write_cron_env_var XRAY_VLESS_PORT
+        write_cron_env_var XRAY_VMESS_PORT
+        write_cron_env_var KOMARI_FORCE_PUBLIC_SITE
+        write_cron_env_var KOMARI_BACKUP_LOCK_DIR
+        write_cron_env_var KOMARI_BACKUP_TMP_DIR
+        write_cron_env_var RESTORE_STATE_FILE
+        write_cron_env_var DATA_DIR
+        write_cron_env_var WORK_DIR
+        write_cron_env_var LOG_FILE
+    } > "$CRON_ENV_FILE"
+    chmod 600 "$CRON_ENV_FILE"
 
-mkdir -p "$CRONTAB_DIR"
-# 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
-: > "$CRONTAB_FILE"
-if [ "$BACKUP_ENABLED" = "1" ]; then
-    append_cron_job "$BACKUP_TIME" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$BACKUP_SCRIPT") >> /tmp/backup.log 2>&1"
-    # 添加自动还原任务（每分钟检测一次）
-    append_cron_job "* * * * *" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$RESTORE_SCRIPT") a >> /tmp/restore-cron.log 2>&1"
-fi
+    : > "$CRONTAB_FILE"
+    if [ "$BACKUP_ENABLED" = "1" ]; then
+        # 根据 BACKUP_TIME 环境变量配置备份任务（UTC 时间）
+        append_cron_job "$BACKUP_TIME" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$BACKUP_SCRIPT") >> /tmp/backup.log 2>&1"
+        # 添加自动还原任务（每分钟检测一次）
+        append_cron_job "* * * * *" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$RESTORE_SCRIPT") a >> /tmp/restore-cron.log 2>&1"
+    fi
 
-# 添加脚本更新任务（如果未禁用自动更新，则每天 03:30 UTC 执行）
-# 默认自动更新，用户可通过设置 NO_AUTO_RENEW=1 禁用
-if [ -z "$NO_AUTO_RENEW" ]; then
-    append_cron_job "30 3 * * *" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$RENEW_SCRIPT") >> /tmp/renew.log 2>&1"
-fi
+    # 添加脚本更新任务（如果未禁用自动更新，则每天 03:30 UTC 执行）
+    # 默认自动更新，用户可通过设置 NO_AUTO_RENEW=1 禁用
+    if [ -z "${NO_AUTO_RENEW:-}" ]; then
+        append_cron_job "30 3 * * *" ". $(shell_quote "$CRON_ENV_FILE") && bash $(shell_quote "$RENEW_SCRIPT") >> /tmp/renew.log 2>&1"
+    fi
+    chmod 600 "$CRONTAB_FILE" 2>/dev/null || true
+
+    if [ "$BACKUP_ENABLED" = "1" ]; then
+        info "定时备份任务已刷新：BACKUP_TIME=$BACKUP_TIME (UTC)"
+    else
+        hint "GitHub 备份变量未完整配置，未写入自动备份和自动还原任务。"
+    fi
+}
+
+# 每次容器启动都刷新 cron 配置，避免环境变量变更后继续沿用旧任务。
+write_cron_config
+
+# 首次运行时执行以下流程，再次运行时存在 damon.conf 文件，直接到最后一步
+if [ ! -s "$SUPERVISOR_CONF" ]; then
 
 # 处理 KOMARI_CLOUDFLARED_TOKEN 格式（JSON 或 Token）
 if [[ "$KOMARI_CLOUDFLARED_TOKEN" =~ TunnelSecret ]]; then
