@@ -294,7 +294,7 @@ create_data_snapshot() {
 
 cleanup_old_backups() {
     hint "正在清理旧备份，保留最近 $BACKUP_DAYS 天的数据..."
-    local cutoff_seconds cutoff_stamp file file_stamp
+    local cutoff_seconds cutoff_stamp file file_stamp file_num cutoff_num
 
     cutoff_seconds=$(($(date -u +%s) - BACKUP_DAYS * 86400))
     cutoff_stamp=$(date -u -d "@$cutoff_seconds" "+%Y-%m-%d-%H%M%S" 2>/dev/null || date -u -r "$cutoff_seconds" "+%Y-%m-%d-%H%M%S" 2>/dev/null || true)
@@ -302,10 +302,12 @@ cleanup_old_backups() {
         hint "无法计算旧备份清理时间，本次跳过清理。"
         return 0
     fi
+    cutoff_num="${cutoff_stamp//-/}"
 
     list_repo_backup_files | while IFS= read -r file; do
         file_stamp=$(basename "$file" | sed -n 's/^komari-\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}-[0-9]\{6\}\)\.tar\.gz$/\1/p')
-        if [ -n "$file_stamp" ] && [ "$file_stamp" \< "$cutoff_stamp" ]; then
+        file_num="${file_stamp//-/}"
+        if [ -n "$file_stamp" ] && [ "$file_num" -lt "$cutoff_num" ] 2>/dev/null; then
             git rm -f --ignore-unmatch --sparse -- "$file" >/dev/null 2>&1 || \
                 git rm -f --cached --ignore-unmatch -- "$file" >/dev/null 2>&1 || \
                 git update-index --force-remove -- "$file" >/dev/null 2>&1 || true
