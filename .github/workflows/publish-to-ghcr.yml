@@ -34,7 +34,7 @@ jobs:
             VERSION="${{ github.event.inputs.komari_version }}"
           else
             # 2. 否则（代码推送 或 定时任务），自动调用 GitHub API 获取上游最新 Release
-            VERSION=$(curl -s https://api.github.com/repos/komari-monitor/komari/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+            VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/komari-monitor/komari/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
             # 容错：如果获取失败，回退到 latest
             if [ -z "$VERSION" ]; then
               VERSION="latest"

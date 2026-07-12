@@ -149,6 +149,37 @@ URL: localhost:8001
 
 ## 3. 快速开始
 
+### 镜像版本选择
+
+本项目每天自动构建并同步上游最新版本。你可以选择以下两种方式之一：
+
+| 标签 | 说明 | 适用场景 |
+|---|---|---|
+| `latest` | 始终指向最新版本 | 想要自动获取更新 |
+| `x.y.z`（如 `1.2.5`） | 固定版本号 | 生产环境稳定性优先 |
+
+**使用固定版本（推荐生产环境）：**
+
+```bash
+# Docker Compose
+image: ghcr.io/jyucoeng/komari:1.2.5
+
+# Docker Run
+docker run ... ghcr.io/jyucoeng/komari:1.2.5
+```
+
+**使用 latest 标签：**
+
+```bash
+# Docker Compose
+image: ghcr.io/jyucoeng/komari:latest
+
+# Docker Run
+docker run ... ghcr.io/jyucoeng/komari:latest
+```
+
+> **提示：** 可在 [GitHub Packages](https://github.com/jyucoeng/komari/pkgs/container/komari) 查看所有可用版本。
+
 ### 部署方式选择
 
 选择适合你的部署方式：
