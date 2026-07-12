@@ -82,49 +82,51 @@ jobs:
           VERSION="${{ env.KOMARI_VERSION }}"
           KEEP=${{ env.KEEP_VERSIONS }}
           TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          REPO="${GITHUB_REPOSITORY}"
 
           echo "清理版本 $VERSION 的旧镜像，保留最新 $KEEP 个..."
-          echo "同时清理所有 untagged 版本..."
 
-          # 获取所有版本（分页处理）
-          ALL_VERSIONS="[]"
+          # 分页获取所有版本到文件
+          echo "[]" > /tmp/all_versions.json
           PAGE=1
           while true; do
-            RESPONSE=$(curl -s -H "Authorization: token $TOKEN" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/packages/container/${PACKAGE_NAME}/versions?per_page=100&page=$PAGE")
-            
-            # 检查是否有数据
-            COUNT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
+            curl -s -H "Authorization: token $TOKEN" \
+              "https://api.github.com/repos/${REPO}/packages/container/${PACKAGE_NAME}/versions?per_page=100&page=$PAGE" \
+              > /tmp/page.json
+
+            COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/page.json'))))" 2>/dev/null)
             if [ -z "$COUNT" ] || [ "$COUNT" -eq 0 ]; then
               break
             fi
-            
-            ALL_VERSIONS=$(python3 -c "
-          import sys, json
-          existing = json.loads('$ALL_VERSIONS') if '$ALL_VERSIONS' != '[]' else []
-          new_data = json.loads(sys.stdin.read())
+
+            python3 -c "
+          import json
+          existing = json.load(open('/tmp/all_versions.json'))
+          new_data = json.load(open('/tmp/page.json'))
           existing.extend(new_data)
-          print(json.dumps(existing))
-          " <<< "$RESPONSE")
-          
+          json.dump(existing, open('/tmp/all_versions.json', 'w'))
+          "
+
             PAGE=$((PAGE + 1))
             if [ "$PAGE" -gt 10 ]; then
               break
             fi
           done
 
-          # 分类处理
-          python3 -c "
-          import sys, json, subprocess
+          echo "已获取所有版本数据"
 
-          data = json.loads('''$ALL_VERSIONS''')
-          version = '$VERSION'
-          keep = int('$KEEP')
-          token = '$TOKEN'
-          repo = '${GITHUB_REPOSITORY}'
-          package_name = '$PACKAGE_NAME'
+          # 分类处理并删除
+          python3 - "$VERSION" "$KEEP" "$TOKEN" "$REPO" "$PACKAGE_NAME" <<'PYEOF'
+          import json, subprocess, sys
 
-          # 分类：带版本标签的 和 untagged 的
+          version = sys.argv[1]
+          keep = int(sys.argv[2])
+          token = sys.argv[3]
+          repo = sys.argv[4]
+          package_name = sys.argv[5]
+
+          data = json.load(open('/tmp/all_versions.json'))
+
           version_tagged = []
           untagged = []
 
@@ -132,44 +134,37 @@ jobs:
               tags = v.get('metadata', {}).get('container', {}).get('tags', [])
               vid = v['id']
               created = v.get('created_at', '')
-              
+
               if not tags:
                   untagged.append((vid, created))
               elif version in tags:
                   version_tagged.append((vid, created))
 
-          # 按创建时间倒序排列
           version_tagged.sort(key=lambda x: x[1], reverse=True)
           untagged.sort(key=lambda x: x[1], reverse=True)
 
-          # 需要删除的版本
           to_delete = []
-
-          # 1. 删除多余的带版本标签的镜像（保留 keep 个）
           if len(version_tagged) > keep:
               to_delete.extend([vid for vid, _ in version_tagged[keep:]])
-
-          # 2. 删除所有 untagged 版本
           to_delete.extend([vid for vid, _ in untagged])
 
-          print(f'版本 {version} 标签镜像: {len(version_tagged)} 个 (保留 {min(keep, len(version_tagged))} 个)')
-          print(f'Untagged 镜像: {len(untagged)} 个 (全部删除)')
-          print(f'需要删除: {len(to_delete)} 个')
+          print(f"版本 {version} 标签镜像: {len(version_tagged)} 个 (保留 {min(keep, len(version_tagged))} 个)")
+          print(f"Untagged 镜像: {len(untagged)} 个 (全部删除)")
+          print(f"需要删除: {len(to_delete)} 个")
 
-          # 执行删除
           deleted = 0
           for vid in to_delete:
-              result = subprocess.run(
+              subprocess.run(
                   ['curl', '-s', '-X', 'DELETE',
                    '-H', f'Authorization: token {token}',
                    f'https://api.github.com/repos/{repo}/packages/container/{package_name}/versions/{vid}'],
-                  capture_output=True, text=True
+                  capture_output=True
               )
               deleted += 1
               if deleted % 10 == 0:
-                  print(f'  已删除 {deleted} 个...')
+                  print(f"  已删除 {deleted} 个...")
 
-          print(f'清理完成，共删除 {deleted} 个旧镜像')
-          "
+          print(f"清理完成，共删除 {deleted} 个旧镜像")
+          PYEOF
 
-          echo "PACKAGE_NAME=$PACKAGE_NAME" >> "$GITHUB_ENV"
+          rm -f /tmp/all_versions.json /tmp/page.json
