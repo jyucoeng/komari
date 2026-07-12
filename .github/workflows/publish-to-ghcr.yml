@@ -125,7 +125,6 @@ jobs:
           print(f"共获取 {len(data)} 条版本记录")
 
           version_tagged = []
-          untagged = []
 
           for v in data:
               if not isinstance(v, dict):
@@ -134,22 +133,17 @@ jobs:
               vid = v.get('id')
               created = v.get('created_at', '')
 
-              if not tags:
-                  untagged.append((vid, created))
-              elif version in tags:
+              if version in tags:
                   version_tagged.append((vid, created))
 
+          # 按创建时间倒序排列，保留最新的 keep 个
           version_tagged.sort(key=lambda x: x[1], reverse=True)
-          untagged.sort(key=lambda x: x[1], reverse=True)
 
           to_delete = []
           if len(version_tagged) > keep:
-              to_delete.extend([vid for vid, _ in version_tagged[keep:]])
-          to_delete.extend([vid for vid, _ in untagged])
+              to_delete = [vid for vid, _ in version_tagged[keep:]]
 
-          print(f"版本 {version} 标签镜像: {len(version_tagged)} 个 (保留 {min(keep, len(version_tagged))} 个)")
-          print(f"Untagged 镜像: {len(untagged)} 个 (全部删除)")
-          print(f"需要删除: {len(to_delete)} 个")
+          print(f"版本 {version} 标签镜像: {len(version_tagged)} 个 (保留最新 {min(keep, len(version_tagged))} 个)")
 
           deleted = 0
           for vid in to_delete:
@@ -177,9 +171,7 @@ jobs:
               if vid in deleted_ids:
                   continue
               tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
-              # 过滤掉 latest，只用版本号计数
               real_tags = [t for t in tags if t != 'latest']
-              has_latest = 'latest' in tags
               if real_tags:
                   for t in real_tags:
                       tag_counts[t] += 1
