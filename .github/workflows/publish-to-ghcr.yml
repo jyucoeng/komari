@@ -163,7 +163,48 @@ jobs:
               if deleted % 10 == 0:
                   print(f"  已删除 {deleted} 个...")
 
+          deleted_ids = set(to_delete)
           print(f"清理完成，共删除 {deleted} 个旧镜像")
+
+          # 统计各版本镜像数量（排除已删除的）
+          print("\n=== 当前各版本镜像数量 ===")
+          from collections import Counter
+          tag_counts = Counter()
+          for v in data:
+              if not isinstance(v, dict):
+                  continue
+              vid = v.get('id')
+              if vid in deleted_ids:
+                  continue
+              tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
+              # 过滤掉 latest，只用版本号计数
+              real_tags = [t for t in tags if t != 'latest']
+              has_latest = 'latest' in tags
+              if real_tags:
+                  for t in real_tags:
+                      tag_counts[t] += 1
+              elif not tags:
+                  tag_counts['(untagged)'] += 1
+
+          # 获取 latest 指向的版本
+          latest_version = None
+          for v in data:
+              if not isinstance(v, dict):
+                  continue
+              vid = v.get('id')
+              if vid in deleted_ids:
+                  continue
+              tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
+              if 'latest' in tags:
+                  real_tags = [t for t in tags if t != 'latest']
+                  if real_tags:
+                      latest_version = real_tags[0]
+                  break
+
+          for tag, count in sorted(tag_counts.items()):
+              label = f"{tag}(latest)" if tag == latest_version else tag
+              print(f"  {label}: {count} 个")
+          print(f"  总计: {sum(tag_counts.values())} 个")
           PYEOF
 
           rm -f /tmp/all_versions.json /tmp/page.json
