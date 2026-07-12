@@ -82,30 +82,19 @@ jobs:
           VERSION="${{ env.KOMARI_VERSION }}"
           KEEP=${{ env.KEEP_VERSIONS }}
           TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          REPO="${GITHUB_REPOSITORY}"
 
           echo "清理版本 $VERSION 的旧镜像，保留最新 $KEEP 个..."
 
-          # 分页获取所有版本到文件
           rm -f /tmp/all_versions.json /tmp/page.json
           echo "[]" > /tmp/all_versions.json
           PAGE=1
           while true; do
             curl -s -H "Authorization: token $TOKEN" \
-              "https://api.github.com/repos/${REPO}/packages/container/${PACKAGE_NAME}/versions?per_page=100&page=$PAGE" \
+              "https://api.github.com/user/packages/container/${PACKAGE_NAME}/versions?per_page=100&page=$PAGE" \
               > /tmp/page.json
-
-            # 调试：打印第一页响应
-            if [ "$PAGE" -eq 1 ]; then
-              echo "=== 第一页 API 响应 (前500字符) ==="
-              head -c 500 /tmp/page.json
-              echo ""
-              echo "=================================="
-            fi
 
             COUNT=$(python3 -c "import json; d=json.load(open('/tmp/page.json')); print(len(d) if isinstance(d, list) else 0)" 2>/dev/null)
             if [ -z "$COUNT" ] || [ "$COUNT" -eq 0 ]; then
-              echo "第 $PAGE 页无数据，停止获取"
               break
             fi
 
@@ -118,34 +107,22 @@ jobs:
           json.dump(existing, open('/tmp/all_versions.json', 'w'))
           "
 
-            echo "第 $PAGE 页获取完成，累计 $(python3 -c "import json; print(len(json.load(open('/tmp/all_versions.json'))))" 2>/dev/null) 条"
             PAGE=$((PAGE + 1))
             if [ "$PAGE" -gt 10 ]; then
               break
             fi
           done
 
-          echo "已获取所有版本数据"
-
-          # 分类处理并删除
-          python3 - "$VERSION" "$KEEP" "$TOKEN" "$REPO" "$PACKAGE_NAME" <<'PYEOF'
+          python3 - "$VERSION" "$KEEP" "$TOKEN" "$PACKAGE_NAME" <<'PYEOF'
           import json, subprocess, sys
 
           version = sys.argv[1]
           keep = int(sys.argv[2])
           token = sys.argv[3]
-          repo = sys.argv[4]
-          package_name = sys.argv[5]
+          package_name = sys.argv[4]
 
           data = json.load(open('/tmp/all_versions.json'))
-
           print(f"共获取 {len(data)} 条版本记录")
-          if data:
-              print(f"第一条记录类型: {type(data[0]).__name__}")
-              if isinstance(data[0], dict):
-                  print(f"第一条记录 keys: {list(data[0].keys())[:5]}")
-              else:
-                  print(f"第一条记录内容: {str(data[0])[:200]}")
 
           version_tagged = []
           untagged = []
@@ -179,7 +156,7 @@ jobs:
               subprocess.run(
                   ['curl', '-s', '-X', 'DELETE',
                    '-H', f'Authorization: token {token}',
-                   f'https://api.github.com/repos/{repo}/packages/container/{package_name}/versions/{vid}'],
+                   f'https://api.github.com/user/packages/container/{package_name}/versions/{vid}'],
                   capture_output=True
               )
               deleted += 1
