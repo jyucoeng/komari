@@ -97,9 +97,9 @@ jobs:
 
           if [ "$BUILD_VERSION" = "$MAX_VERSION" ]; then
             echo "本次构建版本是最大版本，设置 latest 标签"
-            docker pull ${IMAGE_NAME}:${BUILD_VERSION}
-            docker tag ${IMAGE_NAME}:${BUILD_VERSION} ${IMAGE_NAME}:latest
-            docker push ${IMAGE_NAME}:latest
+            docker buildx imagetools create \
+              -t ${IMAGE_NAME}:latest \
+              ${IMAGE_NAME}:${BUILD_VERSION}
             echo "latest 标签已指向 $BUILD_VERSION"
           else
             echo "本次构建版本不是最大版本，不更新 latest 标签"
