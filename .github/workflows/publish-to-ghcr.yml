@@ -65,12 +65,45 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.KOMARI_VERSION != 'latest' && format('{0}:{1}', env.IMAGE_NAME, env.KOMARI_VERSION) || '' }}
+            ${{ env.IMAGE_NAME }}:${{ env.KOMARI_VERSION }}
           build-args: |
             KOMARI_VERSION=${{ env.KOMARI_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: 🏷️ 设置 latest 标签
+        if: success() && env.KOMARI_VERSION != 'latest'
+        run: |
+          IMAGE_NAME="${{ env.IMAGE_NAME }}"
+          BUILD_VERSION="${{ env.KOMARI_VERSION }}"
+
+          # 获取上游最大版本号
+          MAX_VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
+            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' \
+            | grep -iv "snapshot" \
+            | python3 -c "
+          import re, sys
+          versions = [l.strip() for l in sys.stdin if l.strip()]
+          def parse(v):
+              m = re.match(r'(\d+)\.(\d+)\.(\d+)', v)
+              return (int(m.group(1)), int(m.group(2)), int(m.group(3)), v) if m else (0,0,0,v)
+          versions.sort(key=parse)
+          print(versions[-1] if versions else '')
+          ")
+
+          echo "上游最大版本: $MAX_VERSION"
+          echo "本次构建版本: $BUILD_VERSION"
+
+          if [ "$BUILD_VERSION" = "$MAX_VERSION" ]; then
+            echo "本次构建版本是最大版本，设置 latest 标签"
+            docker pull ${IMAGE_NAME}:${BUILD_VERSION}
+            docker tag ${IMAGE_NAME}:${BUILD_VERSION} ${IMAGE_NAME}:latest
+            docker push ${IMAGE_NAME}:latest
+            echo "latest 标签已指向 $BUILD_VERSION"
+          else
+            echo "本次构建版本不是最大版本，不更新 latest 标签"
+          fi
 
       - name: 🧹 清理旧版本镜像
         if: success() && env.KOMARI_VERSION != 'latest'
