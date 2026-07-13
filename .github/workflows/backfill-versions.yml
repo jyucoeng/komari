@@ -1,4 +1,4 @@
-name: 🧹 cleanup-ghcr-temp
+name: 📦 backfill-versions
 
 on:
   workflow_dispatch:
