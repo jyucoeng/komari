@@ -55,33 +55,33 @@ PYEOF
             fi
           done
 
-          python3 <<'PYEOF'
-          import json, subprocess, os
+          python3 << 'PYEOF'
+import json, subprocess, os
 
-          token = os.environ['TOKEN']
-          package_name = os.environ['PACKAGE_NAME']
+token = os.environ['TOKEN']
+package_name = os.environ['PACKAGE_NAME']
 
-          data = json.load(open('/tmp/all_versions.json'))
-          print(f"共获取 {len(data)} 条版本记录，开始删除...")
+data = json.load(open('/tmp/all_versions.json'))
+print(f"共获取 {len(data)} 条版本记录，开始删除...")
 
-          deleted = 0
-          for v in data:
-              if not isinstance(v, dict):
-                  continue
-              vid = v.get('id')
-              if vid:
-                  subprocess.run(
-                      ['curl', '-s', '-X', 'DELETE',
-                       '-H', f'Authorization: token {token}',
-                       f'https://api.github.com/user/packages/container/{package_name}/versions/{vid}'],
-                      capture_output=True
-                  )
-                  deleted += 1
-                  if deleted % 10 == 0:
-                      print(f"  已删除 {deleted} 个...")
+deleted = 0
+for v in data:
+    if not isinstance(v, dict):
+        continue
+    vid = v.get('id')
+    if vid:
+        subprocess.run(
+            ['curl', '-s', '-X', 'DELETE',
+             '-H', f'Authorization: token {token}',
+             f'https://api.github.com/user/packages/container/{package_name}/versions/{vid}'],
+            capture_output=True
+        )
+        deleted += 1
+        if deleted % 10 == 0:
+            print(f"  已删除 {deleted} 个...")
 
-          print(f"删除完成，共删除 {deleted} 个版本")
-          PYEOF
+print(f"删除完成，共删除 {deleted} 个版本")
+PYEOF
 
           rm -f /tmp/all_versions.json /tmp/page.json
         env:

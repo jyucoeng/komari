@@ -132,102 +132,102 @@ PYEOF
             fi
           done
 
-          python3 <<'PYEOF'
-          import json, subprocess, os
-          from collections import Counter
+          python3 << 'PYEOF'
+import json, subprocess, os
+from collections import Counter
 
-          token = os.environ['TOKEN']
-          package_name = os.environ['PACKAGE_NAME']
+token = os.environ['TOKEN']
+package_name = os.environ['PACKAGE_NAME']
 
-          data = json.load(open('/tmp/all_versions.json'))
-          print(f"共获取 {len(data)} 条版本记录")
+data = json.load(open('/tmp/all_versions.json'))
+print(f"共获取 {len(data)} 条版本记录")
 
-          tag_latest = {}
-          untagged = []
+tag_latest = {}
+untagged = []
 
-          for v in data:
-              if not isinstance(v, dict):
-                  continue
-              tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
-              vid = v.get('id')
-              created = v.get('created_at', '')
+for v in data:
+    if not isinstance(v, dict):
+        continue
+    tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
+    vid = v.get('id')
+    created = v.get('created_at', '')
 
-              if not tags:
-                  untagged.append((vid, created))
-              else:
-                  for tag in tags:
-                      if tag not in tag_latest or created > tag_latest[tag][1]:
-                          tag_latest[tag] = (vid, created)
+    if not tags:
+        untagged.append((vid, created))
+    else:
+        for tag in tags:
+            if tag not in tag_latest or created > tag_latest[tag][1]:
+                tag_latest[tag] = (vid, created)
 
-          keep_ids = set()
-          for vid, _ in tag_latest.values():
-              keep_ids.add(vid)
+keep_ids = set()
+for vid, _ in tag_latest.values():
+    keep_ids.add(vid)
 
-          to_delete = []
-          for vid, _ in untagged:
-              to_delete.append(vid)
-          for v in data:
-              if not isinstance(v, dict):
-                  continue
-              tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
-              vid = v.get('id')
-              if vid in keep_ids:
-                  continue
-              if tags:
-                  to_delete.append(vid)
+to_delete = []
+for vid, _ in untagged:
+    to_delete.append(vid)
+for v in data:
+    if not isinstance(v, dict):
+        continue
+    tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
+    vid = v.get('id')
+    if vid in keep_ids:
+        continue
+    if tags:
+        to_delete.append(vid)
 
-          print(f"保留 {len(keep_ids)} 个版本（每个标签最新）")
-          print(f"需要删除: {len(to_delete)} 个")
+print(f"保留 {len(keep_ids)} 个版本（每个标签最新）")
+print(f"需要删除: {len(to_delete)} 个")
 
-          deleted = 0
-          for vid in to_delete:
-              subprocess.run(
-                  ['curl', '-s', '-X', 'DELETE',
-                   '-H', f'Authorization: token {token}',
-                   f'https://api.github.com/user/packages/container/{package_name}/versions/{vid}'],
-                  capture_output=True
-              )
-              deleted += 1
-              if deleted % 10 == 0:
-                  print(f"  已删除 {deleted} 个...")
+deleted = 0
+for vid in to_delete:
+    subprocess.run(
+        ['curl', '-s', '-X', 'DELETE',
+         '-H', f'Authorization: token {token}',
+         f'https://api.github.com/user/packages/container/{package_name}/versions/{vid}'],
+        capture_output=True
+    )
+    deleted += 1
+    if deleted % 10 == 0:
+        print(f"  已删除 {deleted} 个...")
 
-          print(f"清理完成，共删除 {deleted} 个旧镜像")
+print(f"清理完成，共删除 {deleted} 个旧镜像")
 
-          print("\n=== 当前各版本镜像数量 ===")
-          tag_counts = Counter()
-          for v in data:
-              if not isinstance(v, dict):
-                  continue
-              vid = v.get('id')
-              if vid in to_delete:
-                  continue
-              tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
-              real_tags = [t for t in tags if t != 'latest']
-              if real_tags:
-                  for t in real_tags:
-                      tag_counts[t] += 1
-              elif not tags:
-                  tag_counts['(untagged)'] += 1
+print("\n=== 当前各版本镜像数量 ===")
+tag_counts = Counter()
+for v in data:
+    if not isinstance(v, dict):
+        continue
+    vid = v.get('id')
+    if vid in to_delete:
+        continue
+    tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
+    real_tags = [t for t in tags if t != 'latest']
+    if real_tags:
+        for t in real_tags:
+            tag_counts[t] += 1
+    elif not tags:
+        tag_counts['(untagged)'] += 1
 
-          latest_version = None
-          for v in data:
-              if not isinstance(v, dict):
-                  continue
-              vid = v.get('id')
-              if vid in to_delete:
-                  continue
-              tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
-              if 'latest' in tags:
-                  real_tags = [t for t in tags if t != 'latest']
-                  if real_tags:
-                      latest_version = real_tags[0]
-                  break
+latest_version = None
+for v in data:
+    if not isinstance(v, dict):
+        continue
+    vid = v.get('id')
+    if vid in to_delete:
+        continue
+    tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
+    if 'latest' in tags:
+        real_tags = [t for t in tags if t != 'latest']
+        if real_tags:
+            latest_version = real_tags[0]
+        break
 
-          for tag, count in sorted(tag_counts.items()):
-              label = f"{tag}(latest)" if tag == latest_version else tag
-              print(f"  {label}: {count} 个")
-          print(f"  总计: {sum(tag_counts.values())} 个")
-          PYEOF
+for tag, count in sorted(tag_counts.items()):
+    label = f"{tag}(latest)" if tag == latest_version else tag
+    print(f"  {label}: {count} 个")
+print(f"  总计: {sum(tag_counts.values())} 个")
+PYEOF
 
           rm -f /tmp/all_versions.json /tmp/page.json
         env:
