@@ -46,9 +46,35 @@ Caddy (:8001)
 
 <a id="1-fork-后的操作"></a>
 
-## 1. Fork 后的操作
+## 1. 是否需要 Fork
 
-### 第一步：修改源码仓库配置
+### 直接使用（推荐）
+
+如果你只是想使用 Komari，**无需 Fork**，直接使用开发者本人构建好的镜像即可：
+
+```yaml
+image: ghcr.io/jyucoeng/komari:latest
+```
+
+或指定版本：
+
+```yaml
+image: ghcr.io/jyucoeng/komari:1.2.5
+```
+
+镜像地址：`ghcr.io/jyucoeng/komari`
+
+### 需要 Fork 的情况
+
+只有以下情况才需要 Fork：
+
+- 想自己修改源码（如自定义配置、添加功能）
+- 想自己构建和保存镜像到自己的 GHCR
+- 想通过 GitHub Actions 自动构建和更新镜像
+
+### Fork 后的操作
+
+#### 第一步：修改源码仓库配置
 
 Fork 本仓库后，编辑 `repo.conf` 文件，将 `jyucoeng` 改为你的 GitHub 用户名：
 
@@ -60,9 +86,7 @@ KOMARI_PROJECT_OWNER="${KOMARI_PROJECT_OWNER:-jyucoeng}"
 KOMARI_PROJECT_OWNER="${KOMARI_PROJECT_OWNER:-YOUR_USERNAME}"
 ```
 
-### 第二步：构建和发布镜像
-
-#### 自动构建（推荐）
+#### 第二步：构建和发布镜像
 
 GitHub Actions 会自动：
 1. 检测 `main` 分支的推送
