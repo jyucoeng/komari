@@ -134,6 +134,7 @@ jobs:
       - name: 📦 构建并推送所有版本镜像
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+          MAX_VERSION=$(cat /tmp/max_version.txt)
 
           while IFS= read -r VERSION; do
             [ -z "$VERSION" ] && continue
@@ -145,6 +146,12 @@ jobs:
 
             echo "========== 构建版本 $VERSION =========="
 
+            LATEST_TAG=""
+            if [ "$VERSION" = "$MAX_VERSION" ]; then
+              echo "最大版本，同时打 latest 标签"
+              LATEST_TAG="-t ${IMAGE_NAME}:latest"
+            fi
+
             docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --build-arg KOMARI_VERSION=$VERSION \
@@ -154,25 +161,13 @@ jobs:
               --annotation "org.opencontainers.image.readme=https://github.com/jyucoeng/komari/blob/main/README.md" \
               --annotation "org.opencontainers.image.licenses=MIT" \
               -t ${IMAGE_NAME}:${VERSION} \
+              ${LATEST_TAG} \
               --push \
               .
 
             echo "版本 $VERSION 构建完成"
             echo ""
           done < /tmp/versions.txt
-
-      - name: 🏷️ 设置 latest 标签到最大版本
-        run: |
-          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
-          MAX_VERSION=$(cat /tmp/max_version.txt)
-
-          echo "设置 latest 标签到版本 $MAX_VERSION"
-
-          docker buildx imagetools create \
-            -t ${IMAGE_NAME}:latest \
-            ${IMAGE_NAME}:${MAX_VERSION}
-
-          echo "latest 标签已指向 $MAX_VERSION"
 
       - name: 🧹 清理旧版本镜像
         run: |

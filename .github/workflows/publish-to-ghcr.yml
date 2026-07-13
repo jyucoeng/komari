@@ -60,51 +60,49 @@ jobs:
 
       - name: 📦 Build and Push Docker Image
         run: |
+          IMAGE_NAME="${{ env.IMAGE_NAME }}"
+          BUILD_VERSION="${{ env.KOMARI_VERSION }}"
+
+          # 判断是否为最大版本，是则同时打 latest 标签
+          LATEST_TAG=""
+          if [ "$BUILD_VERSION" != "latest" ]; then
+            MAX_VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
+              | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' \
+              | grep -iv "snapshot" \
+              | python3 -c "
+            import re, sys
+            versions = [l.strip() for l in sys.stdin if l.strip()]
+            def parse(v):
+                m = re.match(r'(\d+)\.(\d+)\.(\d+)', v)
+                return (int(m.group(1)), int(m.group(2)), int(m.group(3)), v) if m else (0,0,0,v)
+            versions.sort(key=parse)
+            print(versions[-1] if versions else '')
+            ")
+
+            echo "上游最大版本: $MAX_VERSION"
+            echo "本次构建版本: $BUILD_VERSION"
+
+            if [ "$BUILD_VERSION" = "$MAX_VERSION" ]; then
+              echo "本次构建版本是最大版本，将同时设置 latest 标签"
+              LATEST_TAG="-t ${IMAGE_NAME}:latest"
+            else
+              echo "本次构建版本不是最大版本，不设置 latest 标签"
+            fi
+          fi
+
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            --build-arg KOMARI_VERSION=${{ env.KOMARI_VERSION }} \
+            --build-arg KOMARI_VERSION=${BUILD_VERSION} \
             --annotation "org.opencontainers.image.title=Komari" \
             --annotation "org.opencontainers.image.description=基于 Komari 的增强封装，集成 Cloudflare Tunnel、Caddy 反代、VLESS/VMESS 订阅、GitHub 备份和脚本自动更新" \
             --annotation "org.opencontainers.image.source=https://github.com/jyucoeng/komari" \
             --annotation "org.opencontainers.image.readme=https://github.com/jyucoeng/komari/blob/main/README.md" \
             --annotation "org.opencontainers.image.licenses=MIT" \
-            -t ${{ env.IMAGE_NAME }}:${{ env.KOMARI_VERSION }} \
+            -t ${IMAGE_NAME}:${BUILD_VERSION} \
+            ${LATEST_TAG} \
             --push \
             .
-
-      - name: 🏷️ 设置 latest 标签
-        if: success() && env.KOMARI_VERSION != 'latest'
-        run: |
-          IMAGE_NAME="${{ env.IMAGE_NAME }}"
-          BUILD_VERSION="${{ env.KOMARI_VERSION }}"
-
-          # 获取上游最大版本号
-          MAX_VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
-            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' \
-            | grep -iv "snapshot" \
-            | python3 -c "
-          import re, sys
-          versions = [l.strip() for l in sys.stdin if l.strip()]
-          def parse(v):
-              m = re.match(r'(\d+)\.(\d+)\.(\d+)', v)
-              return (int(m.group(1)), int(m.group(2)), int(m.group(3)), v) if m else (0,0,0,v)
-          versions.sort(key=parse)
-          print(versions[-1] if versions else '')
-          ")
-
-          echo "上游最大版本: $MAX_VERSION"
-          echo "本次构建版本: $BUILD_VERSION"
-
-          if [ "$BUILD_VERSION" = "$MAX_VERSION" ]; then
-            echo "本次构建版本是最大版本，设置 latest 标签"
-            docker buildx imagetools create \
-              -t ${IMAGE_NAME}:latest \
-              ${IMAGE_NAME}:${BUILD_VERSION}
-            echo "latest 标签已指向 $BUILD_VERSION"
-          else
-            echo "本次构建版本不是最大版本，不更新 latest 标签"
-          fi
 
       - name: 🧹 清理旧版本镜像
         if: success() && env.KOMARI_VERSION != 'latest'
