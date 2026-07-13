@@ -68,6 +68,12 @@ jobs:
             ${{ env.IMAGE_NAME }}:${{ env.KOMARI_VERSION }}
           build-args: |
             KOMARI_VERSION=${{ env.KOMARI_VERSION }}
+          labels: |
+            org.opencontainers.image.title=Komari
+            org.opencontainers.image.description=基于 Komari 的增强封装，集成 Cloudflare Tunnel、Caddy 反代、VLESS/VMESS 订阅、GitHub 备份和脚本自动更新
+            org.opencontainers.image.source=https://github.com/jyucoeng/komari
+            org.opencontainers.image.readme=https://github.com/jyucoeng/komari/blob/main/README.md
+            org.opencontainers.image.licenses=MIT
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

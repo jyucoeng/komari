@@ -148,6 +148,11 @@ jobs:
             docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --build-arg KOMARI_VERSION=$VERSION \
+              --label "org.opencontainers.image.title=Komari" \
+              --label "org.opencontainers.image.description=基于 Komari 的增强封装，集成 Cloudflare Tunnel、Caddy 反代、VLESS/VMESS 订阅、GitHub 备份和脚本自动更新" \
+              --label "org.opencontainers.image.source=https://github.com/jyucoeng/komari" \
+              --label "org.opencontainers.image.readme=https://github.com/jyucoeng/komari/blob/main/README.md" \
+              --label "org.opencontainers.image.licenses=MIT" \
               -t ${IMAGE_NAME}:${VERSION} \
               --push \
               .

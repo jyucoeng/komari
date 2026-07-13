@@ -5,12 +5,6 @@ ARG CADDY_VERSION="2.9.1"
 ARG TARGETARCH
 ARG TARGETVARIANT
 
-LABEL org.opencontainers.image.title="Komari" \
-      org.opencontainers.image.description="基于 Komari 的增强封装，集成 Cloudflare Tunnel、Caddy 反代、VLESS/VMESS 订阅、GitHub 备份和脚本自动更新" \
-      org.opencontainers.image.source="https://github.com/jyucoeng/komari" \
-      org.opencontainers.image.readme="https://github.com/jyucoeng/komari/blob/main/README.md" \
-      org.opencontainers.image.licenses="MIT"
-
 RUN apk add --no-cache bash curl wget git sqlite jq tar supervisor coreutils unzip
 
 RUN set -eux; \
