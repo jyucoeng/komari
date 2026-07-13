@@ -17,11 +17,11 @@ jobs:
       - name: 🧭 获取上游所有 release 版本
         id: versions
         run: |
-          # 获取所有 release 版本号，过滤掉 Snapshot
+          # 获取所有 release 版本号，过滤掉 Snapshot，按版本号从小到大排序
           VERSIONS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
             | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' \
-            | grep -iv "snapshot" | head -20)
+            | grep -iv "snapshot" | sort -V | head -20)
           
           echo "获取到的版本:"
           echo "$VERSIONS"
