@@ -148,18 +148,14 @@ jobs:
             docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --build-arg KOMARI_VERSION=$VERSION \
-              -t ${IMAGE_NAME}:${VERSION} \
-              --push \
-              .
-
-            docker buildx imagetools create \
               --annotation "org.opencontainers.image.title=Komari" \
               --annotation "org.opencontainers.image.description=基于 Komari 的增强封装，集成 Cloudflare Tunnel、Caddy 反代、VLESS/VMESS 订阅、GitHub 备份和脚本自动更新" \
               --annotation "org.opencontainers.image.source=https://github.com/jyucoeng/komari" \
               --annotation "org.opencontainers.image.readme=https://github.com/jyucoeng/komari/blob/main/README.md" \
               --annotation "org.opencontainers.image.licenses=MIT" \
               -t ${IMAGE_NAME}:${VERSION} \
-              ${IMAGE_NAME}:${VERSION}
+              --push \
+              .
 
             echo "版本 $VERSION 构建完成"
             echo ""
@@ -173,11 +169,6 @@ jobs:
           echo "设置 latest 标签到版本 $MAX_VERSION"
 
           docker buildx imagetools create \
-            --annotation "org.opencontainers.image.title=Komari" \
-            --annotation "org.opencontainers.image.description=基于 Komari 的增强封装，集成 Cloudflare Tunnel、Caddy 反代、VLESS/VMESS 订阅、GitHub 备份和脚本自动更新" \
-            --annotation "org.opencontainers.image.source=https://github.com/jyucoeng/komari" \
-            --annotation "org.opencontainers.image.readme=https://github.com/jyucoeng/komari/blob/main/README.md" \
-            --annotation "org.opencontainers.image.licenses=MIT" \
             -t ${IMAGE_NAME}:latest \
             ${IMAGE_NAME}:${MAX_VERSION}
 
