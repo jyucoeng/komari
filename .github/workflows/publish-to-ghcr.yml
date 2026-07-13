@@ -13,9 +13,6 @@ on:
         required: false
         default: ""
 
-env:
-  KEEP_VERSIONS: 5  # 每个版本号保留的镜像数量
-
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -76,14 +73,12 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: 🧹 清理旧版本镜像
-        if: env.KOMARI_VERSION != 'latest'
+        if: success() && env.KOMARI_VERSION != 'latest'
         run: |
           PACKAGE_NAME=$(echo "${GITHUB_REPOSITORY,,}" | cut -d'/' -f2)
-          VERSION="${{ env.KOMARI_VERSION }}"
-          KEEP=${{ env.KEEP_VERSIONS }}
           TOKEN="${{ secrets.GITHUB_TOKEN }}"
 
-          echo "清理版本 $VERSION 的旧镜像，保留最新 $KEEP 个..."
+          echo "清理包 ${PACKAGE_NAME} 的旧版本..."
 
           rm -f /tmp/all_versions.json /tmp/page.json
           echo "[]" > /tmp/all_versions.json
@@ -113,18 +108,18 @@ jobs:
             fi
           done
 
-          python3 - "$VERSION" "$KEEP" "$TOKEN" "$PACKAGE_NAME" <<'PYEOF'
-          import json, subprocess, sys
+          python3 <<'PYEOF'
+          import json, subprocess, os
+          from collections import Counter
 
-          version = sys.argv[1]
-          keep = int(sys.argv[2])
-          token = sys.argv[3]
-          package_name = sys.argv[4]
+          token = os.environ['TOKEN']
+          package_name = os.environ['PACKAGE_NAME']
 
           data = json.load(open('/tmp/all_versions.json'))
           print(f"共获取 {len(data)} 条版本记录")
 
-          version_tagged = []
+          tag_latest = {}
+          untagged = []
 
           for v in data:
               if not isinstance(v, dict):
@@ -133,17 +128,32 @@ jobs:
               vid = v.get('id')
               created = v.get('created_at', '')
 
-              if version in tags:
-                  version_tagged.append((vid, created))
+              if not tags:
+                  untagged.append((vid, created))
+              else:
+                  for tag in tags:
+                      if tag not in tag_latest or created > tag_latest[tag][1]:
+                          tag_latest[tag] = (vid, created)
 
-          # 按创建时间倒序排列，保留最新的 keep 个
-          version_tagged.sort(key=lambda x: x[1], reverse=True)
+          keep_ids = set()
+          for vid, _ in tag_latest.values():
+              keep_ids.add(vid)
 
           to_delete = []
-          if len(version_tagged) > keep:
-              to_delete = [vid for vid, _ in version_tagged[keep:]]
+          for vid, _ in untagged:
+              to_delete.append(vid)
+          for v in data:
+              if not isinstance(v, dict):
+                  continue
+              tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
+              vid = v.get('id')
+              if vid in keep_ids:
+                  continue
+              if tags:
+                  to_delete.append(vid)
 
-          print(f"版本 {version} 标签镜像: {len(version_tagged)} 个 (保留最新 {min(keep, len(version_tagged))} 个)")
+          print(f"保留 {len(keep_ids)} 个版本（每个标签最新）")
+          print(f"需要删除: {len(to_delete)} 个")
 
           deleted = 0
           for vid in to_delete:
@@ -157,18 +167,15 @@ jobs:
               if deleted % 10 == 0:
                   print(f"  已删除 {deleted} 个...")
 
-          deleted_ids = set(to_delete)
           print(f"清理完成，共删除 {deleted} 个旧镜像")
 
-          # 统计各版本镜像数量（排除已删除的）
           print("\n=== 当前各版本镜像数量 ===")
-          from collections import Counter
           tag_counts = Counter()
           for v in data:
               if not isinstance(v, dict):
                   continue
               vid = v.get('id')
-              if vid in deleted_ids:
+              if vid in to_delete:
                   continue
               tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
               real_tags = [t for t in tags if t != 'latest']
@@ -178,13 +185,12 @@ jobs:
               elif not tags:
                   tag_counts['(untagged)'] += 1
 
-          # 获取 latest 指向的版本
           latest_version = None
           for v in data:
               if not isinstance(v, dict):
                   continue
               vid = v.get('id')
-              if vid in deleted_ids:
+              if vid in to_delete:
                   continue
               tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
               if 'latest' in tags:

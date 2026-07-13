@@ -14,17 +14,23 @@ jobs:
       - name: ⬇️ Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 🧭 Get upstream version
-        id: version
+      - name: 🧭 获取上游所有 release 版本
+        id: versions
         run: |
-          VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/komari-monitor/komari/releases/latest \
-            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ -z "$VERSION" ]; then
-            VERSION="latest"
-          fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "上游版本: $VERSION"
+          # 获取所有 release 版本号
+          VERSIONS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
+            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | head -20)
+          
+          echo "获取到的版本:"
+          echo "$VERSIONS"
+          
+          # 写入文件供后续步骤使用
+          echo "$VERSIONS" > /tmp/versions.txt
+          
+          # 设置为输出
+          VERSION_LIST=$(echo "$VERSIONS" | tr '\n' ',' | sed 's/,$//')
+          echo "VERSION_LIST=$VERSION_LIST" >> "$GITHUB_OUTPUT"
 
       - name: 🏷️ Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -39,19 +45,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: 📦 Build and Push Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ env.VERSION }}
-          build-args: |
-            KOMARI_VERSION=${{ env.VERSION }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: 📦 构建并推送所有版本镜像
+        run: |
+          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+          
+          while IFS= read -r VERSION; do
+            [ -z "$VERSION" ] && continue
+            echo "========== 构建版本 $VERSION =========="
+            
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg KOMARI_VERSION=$VERSION \
+              -t ${IMAGE_NAME}:${VERSION} \
+              -t ${IMAGE_NAME}:latest \
+              --push \
+              .
+            
+            echo "版本 $VERSION 构建完成"
+            echo ""
+          done < /tmp/versions.txt
 
       - name: 🧹 清理旧版本镜像
         run: |
@@ -59,7 +71,6 @@ jobs:
           TOKEN="${{ secrets.GITHUB_TOKEN }}"
           echo "开始清理包 ${PACKAGE_NAME} 的旧版本..."
 
-          # 获取所有版本
           rm -f /tmp/all_versions.json /tmp/page.json
           echo "[]" > /tmp/all_versions.json
           PAGE=1
@@ -88,20 +99,18 @@ jobs:
             fi
           done
 
-          # 分类处理：找出每个标签最新版本，删除其余
           python3 <<'PYEOF'
-          import json, subprocess, sys, os
-          from collections import defaultdict
+          import json, subprocess, os
+          from collections import Counter
 
-          token = os.environ['TOKEN'] if 'TOKEN' in os.environ else ''
-          package_name = os.environ['PACKAGE_NAME'] if 'PACKAGE_NAME' in os.environ else ''
+          token = os.environ['TOKEN']
+          package_name = os.environ['PACKAGE_NAME']
 
           data = json.load(open('/tmp/all_versions.json'))
           print(f"共获取 {len(data)} 条版本记录")
 
-          # 按标签分组，每个标签只保留最新版本
-          tag_latest = {}  # tag -> (version_id, created_at)
-          untagged = []    # 所有无标签版本
+          tag_latest = {}
+          untagged = []
 
           for v in data:
               if not isinstance(v, dict):
@@ -117,17 +126,13 @@ jobs:
                       if tag not in tag_latest or created > tag_latest[tag][1]:
                           tag_latest[tag] = (vid, created)
 
-          # 需要保留的版本 ID
           keep_ids = set()
           for vid, _ in tag_latest.values():
               keep_ids.add(vid)
 
-          # 需要删除的：所有无标签版本 + 每个标签多余的版本
           to_delete = []
           for vid, _ in untagged:
               to_delete.append(vid)
-
-          # 对于每个标签，删除不是最新的版本
           for v in data:
               if not isinstance(v, dict):
                   continue
@@ -135,11 +140,10 @@ jobs:
               vid = v.get('id')
               if vid in keep_ids:
                   continue
-              if tags:  # 有标签但不是最新
+              if tags:
                   to_delete.append(vid)
 
           print(f"保留 {len(keep_ids)} 个版本（每个标签最新）")
-          print(f"Untagged 镜像: {len(untagged)} 个")
           print(f"需要删除: {len(to_delete)} 个")
 
           deleted = 0
@@ -156,9 +160,7 @@ jobs:
 
           print(f"清理完成，共删除 {deleted} 个旧镜像")
 
-          # 输出当前各版本镜像数量
           print("\n=== 当前各版本镜像数量 ===")
-          from collections import Counter
           tag_counts = Counter()
           for v in data:
               if not isinstance(v, dict):
@@ -194,7 +196,7 @@ jobs:
           print(f"  总计: {sum(tag_counts.values())} 个")
           PYEOF
 
-          rm -f /tmp/all_versions.json /tmp/page.json
+          rm -f /tmp/all_versions.json /tmp/page.json /tmp/versions.txt
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGE_NAME: ${{ github.event.repository.name }}
