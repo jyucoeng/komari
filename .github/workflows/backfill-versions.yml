@@ -1,4 +1,4 @@
-name: 📦 backfill-versions
+name: backfill-versions
 
 on:
   workflow_dispatch:

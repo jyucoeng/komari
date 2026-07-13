@@ -1,4 +1,4 @@
-name: 🐳 publish-to-ghcr
+name: publish-to-ghcr
 
 on:
   push:
