@@ -17,10 +17,11 @@ jobs:
       - name: 🧭 获取上游所有 release 版本
         id: versions
         run: |
-          # 获取所有 release 版本号
+          # 获取所有 release 版本号，过滤掉 Snapshot
           VERSIONS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
-            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | head -20)
+            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' \
+            | grep -iv "snapshot" | head -20)
           
           echo "获取到的版本:"
           echo "$VERSIONS"
@@ -51,6 +52,13 @@ jobs:
           
           while IFS= read -r VERSION; do
             [ -z "$VERSION" ] && continue
+            
+            # 检查上游 GHCR 镜像是否存在（通过检查 manifest）
+            if ! docker manifest inspect ghcr.io/komari-monitor/komari:${VERSION} >/dev/null 2>&1; then
+              echo "跳过版本 $VERSION（上游无对应镜像）"
+              continue
+            fi
+            
             echo "========== 构建版本 $VERSION =========="
             
             docker buildx build \
