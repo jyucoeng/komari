@@ -239,3 +239,6 @@ jobs:
           PYEOF
 
           rm -f /tmp/all_versions.json /tmp/page.json
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE_NAME: ${{ github.event.repository.name }}
