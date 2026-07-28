@@ -70,6 +70,8 @@ jobs:
             KOMARI_VERSION=${{ env.KOMARI_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
 
       - name: 🏷️ 设置 latest 标签
         if: success() && env.KOMARI_VERSION != 'latest'
