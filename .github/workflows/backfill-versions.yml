@@ -92,31 +92,34 @@ jobs:
         run: |
           curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
-            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' \
-            | grep -iv "snapshot" > /tmp/raw_versions.txt
+            > /tmp/releases.json
 
           python3 -c "
-          import re
+          import re, json
 
           def parse_version(v):
-              match = re.match(r'(\d+)\.(\d+)\.(\d+)(.*)', v)
-              if match:
-                  major, minor, patch = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                  has_suffix = 1 if match.group(4).strip() else 0
-                  return (major, minor, patch, has_suffix, v)
-              return (0, 0, 0, 1, v)
+              match = re.match(r'(\d+)\.(\d+)\.(\d+)', v)
+              return (int(match.group(1)), int(match.group(2)), int(match.group(3))) if match else (0, 0, 0)
 
-          versions = open('/tmp/raw_versions.txt').read().strip().split('\n')
-          versions.sort(key=parse_version)
+          releases = json.load(open('/tmp/releases.json'))
+          versions = []
+          for r in releases:
+              tag = r.get('tag_name', '')
+              if 'snapshot' in tag.lower():
+                  continue
+              created = r.get('created_at', '')
+              versions.append((parse_version(tag), created, tag))
 
-          # 最大版本
-          max_version = versions[-1]
+          versions.sort(key=lambda x: (x[0], x[1]))
+          sorted_tags = [v[2] for v in versions]
+
+          max_version = sorted_tags[-1] if sorted_tags else ''
           open('/tmp/max_version.txt', 'w').write(max_version + '\n')
-          open('/tmp/versions.txt', 'w').write('\n'.join(versions) + '\n')
+          open('/tmp/versions.txt', 'w').write('\n'.join(sorted_tags) + '\n')
 
           print(f'最大版本: {max_version}')
           print('构建顺序:')
-          for i, v in enumerate(versions, 1):
+          for i, v in enumerate(sorted_tags, 1):
               print(f'  {i}. {v}')
           "
 

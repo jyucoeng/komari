@@ -80,20 +80,22 @@ jobs:
           # 获取上游最大版本号
           MAX_VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
-            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' \
-            | grep -iv "snapshot" \
             | python3 -c "
-          import re, sys
-          versions = [l.strip() for l in sys.stdin if l.strip()]
+          import re, sys, json
+          releases = json.load(sys.stdin)
           def parse(v):
-              m = re.match(r'(\d+)\.(\d+)\.(\d+)(.*)', v)
-              if not m:
-                  return (0, 0, 0, 1, v)
-              major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
-              has_suffix = 1 if m.group(4).strip() else 0
-              return (major, minor, patch, has_suffix, v)
-          versions.sort(key=parse)
-          print(versions[-1] if versions else '')
+              m = re.match(r'(\d+)\.(\d+)\.(\d+)', v)
+              return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)
+          best = None
+          for r in releases:
+              tag = r.get('tag_name', '')
+              if 'snapshot' in tag.lower():
+                  continue
+              created = r.get('created_at', '')
+              ver = parse(tag)
+              if best is None or ver > best[0] or (ver == best[0] and created > best[1]):
+                  best = (ver, created, tag)
+          print(best[2] if best else '')
           ")
 
           echo "上游最大版本: $MAX_VERSION"
