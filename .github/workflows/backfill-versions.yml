@@ -154,8 +154,8 @@ jobs:
               --platform linux/amd64,linux/arm64 \
               --build-arg KOMARI_VERSION=$VERSION \
               -t ${IMAGE_NAME}:${VERSION} \
-              --provenance=false \
-              --sbom=false \
+              --attest type=provenance,disabled=true \
+              --attest type=sbom,disabled=true \
               --push \
               .
 
