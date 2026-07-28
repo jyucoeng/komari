@@ -14,6 +14,12 @@ jobs:
       - name: ⬇️ Checkout Repository
         uses: actions/checkout@v4
 
+      - name: 🏷️ Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: 🔑 Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -21,18 +27,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: 🧹 删除所有现有版本
+      - name: 🧭 获取上游所有 release 版本
         run: |
-          PACKAGE_NAME=$(echo "${GITHUB_REPOSITORY,,}" | cut -d'/' -f2)
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          echo "开始删除包 ${PACKAGE_NAME} 的所有版本..."
+          rm -f /tmp/releases.json /tmp/versions.txt /tmp/max_version.txt
 
-          rm -f /tmp/all_versions.json /tmp/page.json
-          echo "[]" > /tmp/all_versions.json
+          echo "[]" > /tmp/releases.json
           PAGE=1
           while true; do
-            curl -s -H "Authorization: token $TOKEN" \
-              "https://api.github.com/user/packages/container/${PACKAGE_NAME}/versions?per_page=100&page=$PAGE" \
+            curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/komari-monitor/komari/releases?per_page=100&page=$PAGE" \
               > /tmp/page.json
 
             COUNT=$(python3 -c "import json; d=json.load(open('/tmp/page.json')); print(len(d) if isinstance(d, list) else 0)" 2>/dev/null)
@@ -42,11 +45,11 @@ jobs:
 
             python3 -c "
           import json
-          existing = json.load(open('/tmp/all_versions.json'))
+          existing = json.load(open('/tmp/releases.json'))
           new_data = json.load(open('/tmp/page.json'))
           if isinstance(new_data, list):
               existing.extend(new_data)
-          json.dump(existing, open('/tmp/all_versions.json', 'w'))
+          json.dump(existing, open('/tmp/releases.json', 'w'))
           "
 
             PAGE=$((PAGE + 1))
@@ -55,46 +58,7 @@ jobs:
             fi
           done
 
-          python3 <<'PYEOF'
-          import json, subprocess, os
-
-          token = os.environ['TOKEN']
-          package_name = os.environ['PACKAGE_NAME']
-
-          data = json.load(open('/tmp/all_versions.json'))
-          print(f"共获取 {len(data)} 条版本记录，开始删除...")
-
-          deleted = 0
-          for v in data:
-              if not isinstance(v, dict):
-                  continue
-              vid = v.get('id')
-              if vid:
-                  subprocess.run(
-                      ['curl', '-s', '-X', 'DELETE',
-                       '-H', f'Authorization: token {token}',
-                       f'https://api.github.com/user/packages/container/{package_name}/versions/{vid}'],
-                      capture_output=True
-                  )
-                  deleted += 1
-                  if deleted % 10 == 0:
-                      print(f"  已删除 {deleted} 个...")
-
-          print(f"删除完成，共删除 {deleted} 个版本")
-          PYEOF
-
-          rm -f /tmp/all_versions.json /tmp/page.json
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PACKAGE_NAME: ${{ github.event.repository.name }}
-
-      - name: 🧭 获取上游所有 release 版本
-        run: |
-          curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
-            > /tmp/releases.json
-
-          python3 -c "
+          python3 <<-'PYEOF'
           import re, json
 
           def parse_version(v):
@@ -117,24 +81,14 @@ jobs:
           open('/tmp/max_version.txt', 'w').write(max_version + '\n')
           open('/tmp/versions.txt', 'w').write('\n'.join(sorted_tags) + '\n')
 
+          print(f'共发现 {len(sorted_tags)} 个版本')
           print(f'最大版本: {max_version}')
           print('构建顺序:')
           for i, v in enumerate(sorted_tags, 1):
               print(f'  {i}. {v}')
-          "
+          PYEOF
 
-      - name: 🏷️ Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: 🛠️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔑 Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          rm -f /tmp/releases.json /tmp/page.json
 
       - name: 📦 构建并推送所有版本镜像
         run: |
@@ -151,7 +105,8 @@ jobs:
             echo "========== 构建版本 $VERSION =========="
 
             docker buildx build \
-              --platform linux/amd64,linux/arm64 \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
               --build-arg KOMARI_VERSION=$VERSION \
               -t ${IMAGE_NAME}:${VERSION} \
               --attest type=provenance,disabled=true \
@@ -307,7 +262,7 @@ jobs:
           print(f"  总计: {sum(tag_counts.values())} 个")
           PYEOF
 
-          rm -f /tmp/all_versions.json /tmp/page.json /tmp/versions.txt /tmp/raw_versions.txt /tmp/max_version.txt
+          rm -f /tmp/all_versions.json /tmp/page.json /tmp/versions.txt /tmp/max_version.txt
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGE_NAME: ${{ github.event.repository.name }}
