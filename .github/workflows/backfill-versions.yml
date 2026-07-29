@@ -343,12 +343,6 @@ jobs:
           ALL_VERSIONS_JSON: ${{ needs.discover.outputs.all_versions_json }}
           IMAGE_NAME: ghcr.io/${{ github.repository }}
         run: |
-          echo "DEBUG: IMAGE_NAME=$IMAGE_NAME"
-          echo "DEBUG: testing docker manifest inspect on first version..."
-          FIRST_V=$(echo "$ALL_VERSIONS_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)[-1] if json.load(sys.stdin) else '')")
-          if [ -n "$FIRST_V" ]; then
-            docker buildx imagetools inspect ${IMAGE_NAME}:${FIRST_V} 2>&1 || echo "DEBUG: docker inspect returned non-zero"
-          fi
           python3 <<'PYEOF'
           import subprocess, json, os
           from concurrent.futures import ThreadPoolExecutor, as_completed
