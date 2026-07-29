@@ -88,13 +88,16 @@ jobs:
 
           rm -f /tmp/releases.json /tmp/page.json
 
-            # ─── round-robin 分组 ───
+            # ─── round-robin 分组 + 预检可用架构 ───
             # 例: 15 个版本分 4 组 → 各组 [0,4,8,12], [1,5,9,13], [2,6,10,14], [3,7,11]
             # 空组会被过滤掉，不会创建无用的 build job
+            # 同时用 ThreadPoolExecutor 并行检查各版本二进制可用性（386/riscv64/loong64），
+            # build job 直接使用预检结果，无需再跑 wget。
             GROUPS=${{ inputs.groups || 12 }}
 
           python3 <<-PYEOF
-          import json, os
+          import json, os, subprocess
+          from concurrent.futures import ThreadPoolExecutor, as_completed
 
           with open('/tmp/versions.txt') as f:
               versions = [line.strip() for line in f if line.strip()]
@@ -105,9 +108,29 @@ jobs:
           if n > len(versions):
               n = len(versions)
 
+          # 并行检查各版本二进制可用性
+          extra_arches = ['386', 'riscv64', 'loong64']
+
+          def check_arches(v):
+              result = {'v': v, 'platforms': 'linux/amd64,linux/arm64'}
+              for arch in extra_arches:
+                  r = subprocess.run(
+                      ['wget', '-q', '--spider',
+                       f'https://github.com/komari-monitor/komari/releases/download/{v}/komari-linux-{arch}'],
+                      capture_output=True, timeout=15)
+                  if r.returncode == 0:
+                      result['platforms'] += f',linux/{arch}'
+              return result
+
+          enriched = [None] * len(versions)
+          with ThreadPoolExecutor(max_workers=16) as pool:
+              fut = {pool.submit(check_arches, v): i for i, v in enumerate(versions)}
+              for f in as_completed(fut):
+                  enriched[fut[f]] = f.result()
+
           groups = [[] for _ in range(n)]
-          for i, v in enumerate(versions):
-              groups[i % n].append(v)
+          for i, item in enumerate(enriched):
+              groups[i % n].append(item)
           groups = [g for g in groups if g]
 
           max_ver = versions[-1] if versions else ''
@@ -118,7 +141,9 @@ jobs:
               f.write(f'groups_json={json.dumps(groups)}\n')
               f.write(f'group_indices={json.dumps(list(range(len(groups))))}\n')
 
+          total_built = sum(1 for item in enriched if 'linux/riscv64' in item['platforms'])
           print(f'分割为 {len(groups)} 组，每组 ~{max(1, len(versions)//len(groups))} 个版本')
+          print(f'其中 {total_built} 个版本有 riscv64 二进制')
           PYEOF
         env:
           GROUPS: ${{ inputs.groups || 12 }}
@@ -157,16 +182,33 @@ jobs:
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
 
-          VERSIONS=$(python3 -c "
+          TMPFILE=$(mktemp)
+          python3 -c "
           import json, os
           groups = json.loads(os.environ['GROUPS_JSON'])
           idx = int(os.environ['MATRIX_INDEX'])
-          for v in groups[idx]:
-              print(v)
-          ")
+          for item in groups[idx]:
+              print(json.dumps(item))
+          " > "$TMPFILE"
 
-          while IFS= read -r VERSION; do
+          while IFS= read -r LINE; do
+            [ -z "$LINE" ] && continue
+
+            PAYLOAD=$(echo "$LINE" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          print(d.get('v', ''))
+          print(d.get('platforms', ''))
+          ")
+            VERSION=$(echo "$PAYLOAD" | head -1)
+            PLATFORMS=$(echo "$PAYLOAD" | tail -1)
             [ -z "$VERSION" ] && continue
+
+            # 跳过已构建版本
+            if docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
+              echo "⏭️ 版本 $VERSION 已存在，跳过"
+              continue
+            fi
 
             if ! docker manifest inspect ghcr.io/komari-monitor/komari:${VERSION} >/dev/null 2>&1; then
               echo "跳过版本 $VERSION（上游无对应镜像）"
@@ -174,36 +216,9 @@ jobs:
             fi
 
             echo "========== [组 $MATRIX_INDEX] 构建版本 $VERSION =========="
+            echo "    平台: $PLATFORMS"
 
-            # ─── 调参入口：支持的架构列表 ───
-            # amd64 + arm64 始终开启（upstream 自始就有）。
-            # 需要增减平台时，仿照 386/riscv64 的写法加 if/wget 判断。
-            PLATFORMS="linux/amd64,linux/arm64"
-
-            # 386
-            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-386" 2>/dev/null; then
-              PLATFORMS="${PLATFORMS},linux/386"
-              echo "✅ ${VERSION}: 386 有二进制，加入构建"
-            else
-              echo "⚠️ ${VERSION}: 386 无二进制"
-            fi
-
-            # riscv64
-            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-riscv64" 2>/dev/null; then
-              PLATFORMS="${PLATFORMS},linux/riscv64"
-              echo "✅ ${VERSION}: riscv64 有二进制，加入构建"
-            else
-              echo "⚠️ ${VERSION}: riscv64 无二进制"
-            fi
-
-            # loong64 (暂无 base 镜像支持)
-            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-loong64" 2>/dev/null; then
-              echo "⚠️ ${VERSION}: loong64 有二进制但无 base 镜像支持，跳过"
-            else
-              echo "⚠️ ${VERSION}: loong64 无二进制"
-            fi
-
-            # Multi-platform build & push (internally parallel)
+            # Multi-platform build & push
             docker buildx build \
               --platform ${PLATFORMS} \
               --cache-from type=gha \
@@ -215,18 +230,16 @@ jobs:
               . || { echo "❌ 版本 $VERSION 构建失败"; continue; }
 
             # Verify manifest
-            for i in 1 2 3; do
-              sleep 5
-              if docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
-                echo "✅ Manifest verified"
-                break
-              fi
-              echo "⚠️  Attempt $i: manifest not ready..."
-            done
+            if docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
+              echo "✅ Manifest verified"
+            else
+              echo "⚠️ Manifest not ready yet"
+            fi
 
             echo "版本 $VERSION 构建完成"
             echo ""
-          done <<< "$VERSIONS"
+          done < "$TMPFILE"
+          rm -f "$TMPFILE"
 
   # ═══════════════════════════════════════════════
   # Job 3: finalize — 收尾工作
