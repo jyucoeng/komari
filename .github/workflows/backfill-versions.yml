@@ -179,6 +179,7 @@ jobs:
         env:
           GROUPS_JSON: ${{ needs.discover.outputs.groups_json }}
           MATRIX_INDEX: ${{ matrix.index }}
+          MAX_VERSION: ${{ needs.discover.outputs.max_version }}
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
 
@@ -219,6 +220,12 @@ jobs:
             echo "    平台: $PLATFORMS"
 
             # Multi-platform build & push
+            # 如果是最大版本，同时打 latest 标签（避免后续 imagetools create 的 GHCR 复制问题）
+            EXTRA_TAG=""
+            if [ "$VERSION" = "$MAX_VERSION" ]; then
+              EXTRA_TAG="-t ${IMAGE_NAME}:latest"
+              echo "🏷️  最大版本，同时推送 latest 标签"
+            fi
             docker buildx build \
               --platform ${PLATFORMS} \
               --cache-from type=gha \
@@ -226,6 +233,7 @@ jobs:
               --build-arg KOMARI_VERSION=${VERSION} \
               --provenance=false --sbom=false \
               -t ${IMAGE_NAME}:${VERSION} \
+              ${EXTRA_TAG} \
               --push \
               . || { echo "❌ 版本 $VERSION 构建失败"; continue; }
 
@@ -266,24 +274,68 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: 🏷️ 设置 latest 标签到最大版本
+      - name: 🏷️ 确保 latest 标签正确
         if: needs.discover.outputs.max_version != ''
+        env:
+          MAX_VERSION: ${{ needs.discover.outputs.max_version }}
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
-          MAX_VERSION="${{ needs.discover.outputs.max_version }}"
 
-          echo "设置 latest 标签到版本 $MAX_VERSION"
+          # 如果 build job 已经正确推送了 latest，直接退出
+          CURRENT=$(docker buildx imagetools inspect ${IMAGE_NAME}:latest --format '{{.Manifest.Digest}}' 2>/dev/null || echo "")
+          TARGET=$(docker buildx imagetools inspect ${IMAGE_NAME}:${MAX_VERSION} --format '{{.Manifest.Digest}}' 2>/dev/null || echo "")
 
-          for i in 1 2 3 4 5; do
-            if docker buildx imagetools create \
-              -t ${IMAGE_NAME}:latest \
-              ${IMAGE_NAME}:${MAX_VERSION} 2>/dev/null; then
-              echo "✅ latest 标签已指向 $MAX_VERSION"
-              break
-            fi
-            echo "⚠️  Attempt $i failed, waiting 10s..."
-            sleep 10
-          done || { echo "❌ latest 标签设置失败"; exit 1; }
+          if [ -n "$TARGET" ] && [ "$CURRENT" = "$TARGET" ]; then
+            echo "✅ latest 已正确指向 $MAX_VERSION"
+            exit 0
+          fi
+
+          echo "⚠️  latest 标签需要更新，通过 API 直接设置..."
+
+          # 通过 GHCR Registry API 直接设置标签（比 imagetools create 更可靠）
+          python3 <<-PYEOF
+          import urllib.request, json, os, base64
+
+          repo = os.environ.get('GITHUB_REPOSITORY', '').lower()
+          token_secret = os.environ.get('GH_TOKEN', '')
+          max_ver = os.environ.get('MAX_VERSION', '')
+
+          if not repo or not max_ver:
+              exit(1)
+
+          # 获取 GHCR bearer token
+          auth_str = base64.b64encode(f"x-access-token:{token_secret}".encode()).decode()
+          req = urllib.request.Request(
+              f"https://ghcr.io/token?scope=repository:{repo}:pull,push")
+          req.add_header("Authorization", f"Basic {auth_str}")
+          bearer = json.loads(urllib.request.urlopen(req).read())["token"]
+
+          # 读取版本标签的 manifest
+          manifest_url = f"https://ghcr.io/v2/{repo}/manifests/{max_ver}"
+          req = urllib.request.Request(manifest_url)
+          req.add_header("Authorization", f"Bearer {bearer}")
+          req.add_header("Accept",
+              "application/vnd.oci.image.index.v1+json,"
+              "application/vnd.docker.distribution.manifest.list.v2+json,"
+              "application/vnd.oci.image.manifest.v1+json,"
+              "application/vnd.docker.distribution.manifest.v2+json")
+
+          resp = urllib.request.urlopen(req)
+          manifest_data = resp.read()
+          content_type = resp.headers.get("Content-Type", "application/octet-stream")
+
+          # 写入 latest 标签
+          req = urllib.request.Request(
+              f"https://ghcr.io/v2/{repo}/manifests/latest",
+              data=manifest_data,
+              method="PUT")
+          req.add_header("Authorization", f"Bearer {bearer}")
+          req.add_header("Content-Type", content_type)
+          urllib.request.urlopen(req)
+          print(f"✅ latest 标签已指向 {max_ver}")
+          PYEOF
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 📊 Generate allVersion.md report
         continue-on-error: true
@@ -291,6 +343,12 @@ jobs:
           ALL_VERSIONS_JSON: ${{ needs.discover.outputs.all_versions_json }}
           IMAGE_NAME: ghcr.io/${{ github.repository }}
         run: |
+          echo "DEBUG: IMAGE_NAME=$IMAGE_NAME"
+          echo "DEBUG: testing docker manifest inspect on first version..."
+          FIRST_V=$(echo "$ALL_VERSIONS_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)[-1] if json.load(sys.stdin) else '')")
+          if [ -n "$FIRST_V" ]; then
+            docker buildx imagetools inspect ${IMAGE_NAME}:${FIRST_V} 2>&1 || echo "DEBUG: docker inspect returned non-zero"
+          fi
           python3 <<'PYEOF'
           import subprocess, json, os
           from concurrent.futures import ThreadPoolExecutor, as_completed
