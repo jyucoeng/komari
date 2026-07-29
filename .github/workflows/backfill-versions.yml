@@ -274,11 +274,16 @@ jobs:
 
           echo "设置 latest 标签到版本 $MAX_VERSION"
 
-          docker buildx imagetools create \
-            -t ${IMAGE_NAME}:latest \
-            ${IMAGE_NAME}:${MAX_VERSION}
-
-          echo "latest 标签已指向 $MAX_VERSION"
+          for i in 1 2 3 4 5; do
+            if docker buildx imagetools create \
+              -t ${IMAGE_NAME}:latest \
+              ${IMAGE_NAME}:${MAX_VERSION} 2>/dev/null; then
+              echo "✅ latest 标签已指向 $MAX_VERSION"
+              break
+            fi
+            echo "⚠️  Attempt $i failed, waiting 10s..."
+            sleep 10
+          done || { echo "❌ latest 标签设置失败"; exit 1; }
 
       - name: 📊 Generate allVersion.md report
         continue-on-error: true
