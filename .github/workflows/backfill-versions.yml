@@ -132,9 +132,11 @@ jobs:
             # Per-platform build & push (parallel)
             TAGS=""
             pids=()
+            failed=""
             IFS=',' read -ra PLAT_LIST <<< "${PLATFORMS}"
             for plat in "${PLAT_LIST[@]}"; do
               plat_tag="${plat//\//-}"
+              log="/tmp/build-${plat_tag}.log"
               (
                 echo "  Building ${plat}..."
                 docker buildx build \
@@ -145,7 +147,7 @@ jobs:
                   --provenance=false --sbom=false \
                   -t ${IMAGE_NAME}:${VERSION}-${plat_tag} \
                   --push \
-                  . 2>&1 | sed "s/^/[${plat_tag}] /"
+                  . > "$log" 2>&1
                 echo "  ✅ ${plat} done"
               ) &
               pids+=($!)
@@ -153,8 +155,13 @@ jobs:
             done
 
             for pid in "${pids[@]}"; do
-              wait "$pid" || { echo "❌ 部分平台构建失败，跳过合并"; continue 2; }
+              wait "$pid" || failed=1
             done
+
+            if [ -n "$failed" ]; then
+              echo "❌ 部分平台构建失败，跳过版本 $VERSION"
+              continue
+            fi
 
             # Combine into multi-arch manifest
             docker buildx imagetools create -t ${IMAGE_NAME}:${VERSION} ${TAGS}

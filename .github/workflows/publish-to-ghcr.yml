@@ -118,6 +118,7 @@ jobs:
           pids=()
           for plat in "${PLATS[@]}"; do
             plat_tag="${plat//\//-}"
+            log="/tmp/build-${plat_tag}.log"
             (
               echo "▶️ Building ${plat}..."
               docker buildx build \
@@ -128,7 +129,7 @@ jobs:
                 --provenance=false --sbom=false \
                 -t "${IMAGE_NAME}:${VERSION}-${plat_tag}" \
                 --push \
-                . 2>&1 | sed "s/^/[${plat_tag}] /"
+                . > "$log" 2>&1
               echo "✅ ${plat} done"
             ) &
             pids+=($!)
@@ -138,6 +139,14 @@ jobs:
           for pid in "${pids[@]}"; do
             wait "$pid" || failed=1
           done
+
+          echo ""
+          for plat in "${PLATS[@]}"; do
+            plat_tag="${plat//\//-}"
+            echo "--- ${plat_tag} log ---"
+            cat "/tmp/build-${plat_tag}.log"
+          done
+
           [ "$failed" -eq 1 ] && echo "❌ Some platforms failed" && exit 1
 
       - name: 🔗 Create combined multi-arch manifest
