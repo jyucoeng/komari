@@ -1,6 +1,6 @@
 ARG KOMARI_VERSION=latest
 
-FROM alpine:3.20 AS base
+FROM alpine:3.21 AS base
 
 ARG KOMARI_VERSION
 ARG TARGETARCH
