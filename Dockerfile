@@ -1,6 +1,6 @@
 ARG KOMARI_VERSION=latest
 
-FROM debian:bookworm-slim AS base
+FROM debian:trixie-slim AS base
 
 ARG KOMARI_VERSION
 ARG TARGETARCH

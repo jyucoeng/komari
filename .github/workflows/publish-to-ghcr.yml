@@ -89,21 +89,21 @@ jobs:
               echo "⚠️ 上游版本 ${KOMARI_VERSION} 无 komari-linux-386 二进制，跳过 386 架构"
             fi
             if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-riscv64" 2>/dev/null; then
-              if docker manifest inspect debian:bookworm-slim 2>/dev/null | python3 -c "import json,sys; m=json.load(sys.stdin); exit(0 if any(p.get('architecture')=='riscv64' for p in (m.get('manifests',[]) if isinstance(m,dict) else [])) else 1)" 2>/dev/null; then
+              if docker manifest inspect debian:trixie-slim 2>/dev/null | python3 -c "import json,sys; m=json.load(sys.stdin); exit(0 if any(p.get('architecture')=='riscv64' for p in (m.get('manifests',[]) if isinstance(m,dict) else [])) else 1)" 2>/dev/null; then
                 PLATFORMS="${PLATFORMS},linux/riscv64"
                 echo "✅ 上游版本 ${KOMARI_VERSION} 支持 riscv64 架构，将构建 linux/riscv64"
               else
-                echo "⚠️ 上游版本 ${KOMARI_VERSION} 有 riscv64 二进制，但 debian:bookworm-slim 不支持该架构，跳过"
+                echo "⚠️ 上游版本 ${KOMARI_VERSION} 有 riscv64 二进制，但 debian:trixie-slim 不支持该架构，跳过"
               fi
             else
               echo "⚠️ 上游版本 ${KOMARI_VERSION} 无 komari-linux-riscv64 二进制，跳过 riscv64 架构"
             fi
             if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-loong64" 2>/dev/null; then
-              if docker manifest inspect debian:bookworm-slim 2>/dev/null | python3 -c "import json,sys; m=json.load(sys.stdin); exit(0 if any(p.get('architecture')=='loong64' for p in (m.get('manifests',[]) if isinstance(m,dict) else [])) else 1)" 2>/dev/null; then
+              if docker manifest inspect debian:trixie-slim 2>/dev/null | python3 -c "import json,sys; m=json.load(sys.stdin); exit(0 if any(p.get('architecture')=='loong64' for p in (m.get('manifests',[]) if isinstance(m,dict) else [])) else 1)" 2>/dev/null; then
                 PLATFORMS="${PLATFORMS},linux/loong64"
                 echo "✅ 上游版本 ${KOMARI_VERSION} 支持 loong64 架构，将构建 linux/loong64"
               else
-                echo "⚠️ 上游版本 ${KOMARI_VERSION} 有 loong64 二进制，但 debian:bookworm-slim 不支持该架构，跳过"
+                echo "⚠️ 上游版本 ${KOMARI_VERSION} 有 loong64 二进制，但 debian:trixie-slim 不支持该架构，跳过"
               fi
             else
               echo "⚠️ 上游版本 ${KOMARI_VERSION} 无 komari-linux-loong64 二进制，跳过 loong64 架构"
