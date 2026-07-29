@@ -150,9 +150,6 @@ jobs:
               echo "⚠️  Attempt $i: manifest not ready..."
             done
 
-            # Combine into multi-arch manifest
-            docker buildx imagetools create -t ${IMAGE_NAME}:${VERSION} ${TAGS}
-
             echo "版本 $VERSION 构建完成"
             echo ""
           done < /tmp/versions.txt
