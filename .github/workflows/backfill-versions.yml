@@ -105,7 +105,7 @@ jobs:
             echo "========== 构建版本 $VERSION =========="
 
             PLATFORMS="linux/amd64,linux/arm64"
-            if curl -sIf "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-386" >/dev/null 2>&1; then
+            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-386" 2>/dev/null; then
               PLATFORMS="${PLATFORMS},linux/386"
               echo "✅ 上游版本 ${VERSION} 支持 386 架构"
             else

@@ -36,14 +36,29 @@ jobs:
           else
             # 2. 否则（代码推送 或 定时任务），自动调用 GitHub API 获取上游最新 Release
             VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/komari-monitor/komari/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-            # 容错：如果获取失败，回退到 latest
+            # 容错：如果 /releases/latest 获取失败，尝试 /releases?per_page=1
             if [ -z "$VERSION" ]; then
-              VERSION="latest"
+              VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/komari-monitor/komari/releases?per_page=10" \
+                | python3 -c "
+              import json,sys
+              d=json.load(sys.stdin)
+              if isinstance(d,list):
+                  for r in d:
+                      if 'snapshot' not in r.get('tag_name','').lower():
+                          print(r.get('tag_name',''))
+                          break
+              " 2>/dev/null)
+            fi
+            # 如果仍然获取失败，跳过构建
+            if [ -z "$VERSION" ]; then
+              echo "错误：无法获取上游最新版本号，跳过构建"
+              echo "SKIP_BUILD=true" >> "$GITHUB_ENV"
             fi
           fi
 
-          echo "本次构建对应的上游版本为: $VERSION"
-          echo "KOMARI_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "本次构建对应的上游版本为: ${VERSION:-（无）}"
+          echo "KOMARI_VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: 🏷️ Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -67,7 +82,7 @@ jobs:
             echo "上游镜像存在，继续构建"
 
             PLATFORMS="linux/amd64,linux/arm64"
-            if curl -sIf "https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-386" >/dev/null 2>&1; then
+            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-386" 2>/dev/null; then
               PLATFORMS="${PLATFORMS},linux/386"
               echo "✅ 上游版本 ${KOMARI_VERSION} 支持 386 架构，将构建 linux/386"
             else
