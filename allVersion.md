@@ -1,6 +1,6 @@
 # Komari Multi-Arch Support Status
 
-Generated at: 2026-07-29 12:27:47 UTC
+Generated at: 2026-07-29 23:43:46 UTC
 
 ## Column Description
 
@@ -16,14 +16,14 @@ Generated at: 2026-07-29 12:27:47 UTC
 
 | Version | Upstream Image | Upstream Binary Support | Our Image | Our Build Platforms |
 |---------|:--------------:|-------------------------|:---------:|---------------------|
-| 1.3.1 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ❌ | — |
+| 1.3.1 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
 | 1.3.0 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ❌ | — |
 | 1.3.0-pre1 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ❌ | — |
 | 1.2.7 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ❌ | — |
 | 1.2.6 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 1.2.5-fix2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 1.2.5-fix1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
-| 1.2.5 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
+| 1.2.5 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
 | 1.2.3 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 1.2.2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 1.2.1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
