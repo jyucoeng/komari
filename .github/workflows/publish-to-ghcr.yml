@@ -162,19 +162,6 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PKG_NAME: ${{ github.event.repository.name }}
 
-      - name: 🔗 Create combined multi-arch manifest
-        if: success() && env.SKIP_BUILD != 'true'
-        run: |
-          VERSION="${{ env.KOMARI_VERSION }}"
-          IMAGE_NAME="${{ env.IMAGE_NAME }}"
-          IFS=',' read -ra PLATS <<< "${{ env.PLATFORMS }}"
-          SOURCES=""
-          for plat in "${PLATS[@]}"; do
-            plat_tag="${plat//\//-}"
-            SOURCES="${SOURCES} ${IMAGE_NAME}:${VERSION}-${plat_tag}"
-          done
-          docker buildx imagetools create -t "${IMAGE_NAME}:${VERSION}" ${SOURCES}
-
       - name: 📋 Print build report
         if: success() && env.SKIP_BUILD != 'true'
         run: |
