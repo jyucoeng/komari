@@ -58,13 +58,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: 🔍 检查上游镜像是否存在
+      - name: 🔍 检查上游镜像及架构支持
         run: |
           if ! docker manifest inspect ghcr.io/komari-monitor/komari:${KOMARI_VERSION} >/dev/null 2>&1; then
             echo "上游无对应镜像 ghcr.io/komari-monitor/komari:${KOMARI_VERSION}，跳过构建"
             echo "SKIP_BUILD=true" >> "$GITHUB_ENV"
           else
             echo "上游镜像存在，继续构建"
+
+            PLATFORMS="linux/amd64,linux/arm64"
+            if curl -sIf "https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-386" >/dev/null 2>&1; then
+              PLATFORMS="${PLATFORMS},linux/386"
+              echo "✅ 上游版本 ${KOMARI_VERSION} 支持 386 架构，将构建 linux/386"
+            else
+              echo "⚠️ 上游版本 ${KOMARI_VERSION} 无 komari-linux-386 二进制，跳过 386 架构"
+            fi
+            echo "PLATFORMS=${PLATFORMS}" >> "$GITHUB_ENV"
           fi
 
       - name: 📦 Build and Push Docker Image
@@ -74,6 +83,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          platforms: ${{ env.PLATFORMS }}
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.KOMARI_VERSION }}
           build-args: |

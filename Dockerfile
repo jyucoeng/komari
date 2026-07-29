@@ -1,25 +1,40 @@
 ARG KOMARI_VERSION=latest
-FROM ghcr.io/komari-monitor/komari:${KOMARI_VERSION:-latest}
 
-ARG CADDY_VERSION="2.9.1"
+FROM alpine:3.20 AS base
+
+ARG KOMARI_VERSION
 ARG TARGETARCH
 ARG TARGETVARIANT
 
 RUN apk add --no-cache bash curl wget git sqlite jq tar supervisor coreutils unzip
 
 RUN set -eux; \
+    \
+    # Map buildx TARGETARCH to komari binary suffix
     case "${TARGETARCH:-$(apk --print-arch)}${TARGETVARIANT:-}" in \
-        amd64|x86_64) arch="amd64" ;; \
+        amd64|x86_64|"") arch="amd64" ;; \
         arm64|aarch64) arch="arm64" ;; \
-        armv7|arm/v7|armhf|armv7l) arch="arm" ;; \
+        arm*|armv7*|armhf) arch="arm" ;; \
+        386|i386|x86) arch="386" ;; \
+        riscv64) arch="riscv64" ;; \
         *) echo "Unsupported architecture: ${TARGETARCH:-$(apk --print-arch)}${TARGETVARIANT:-}" >&2; exit 1 ;; \
     esac; \
+    \
     mkdir -p /usr/local/bin /app/bin; \
-    wget -q "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${arch}.tar.gz" -O /tmp/caddy.tar.gz; \
+    \
+    # Download komari binary from upstream GitHub releases
+    KOMARI_URL="https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-${arch}"; \
+    echo "Downloading komari from ${KOMARI_URL}"; \
+    wget -q "${KOMARI_URL}" -O /app/komari; \
+    chmod +x /app/komari; \
+    \
+    # Pre-download caddy and cloudflared (entrypoint.sh falls back at runtime)
+    wget -q "https://github.com/caddyserver/caddy/releases/download/v2.9.1/caddy_2.9.1_linux_${arch}.tar.gz" -O /tmp/caddy.tar.gz; \
     tar xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy; \
     chmod +x /usr/local/bin/caddy; \
-    wget -q "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" -O /app/bin/cloudflared; \
-    chmod +x /app/bin/cloudflared; \
+    \
+    wget -q "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" -O /app/bin/cloudflared || true; \
+    chmod +x /app/bin/cloudflared 2>/dev/null || true; \
     rm -f /tmp/caddy.tar.gz /usr/local/bin/cloudflared /usr/bin/cloudflared
 
 COPY entrypoint.sh /usr/local/bin/
