@@ -1,6 +1,6 @@
 name: 📦 backfill-versions
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       groups:
@@ -243,6 +243,7 @@ jobs:
         if: needs.discover.outputs.max_version != ''
         env:
           MAX_VERSION: ${{ needs.discover.outputs.max_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
 
@@ -294,8 +295,6 @@ jobs:
           urllib.request.urlopen(req)
           print(f"✅ latest 标签已指向 {max_ver}")
           PYEOF
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 📊 Generate allVersion.md report
         continue-on-error: true
