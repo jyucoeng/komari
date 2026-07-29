@@ -129,39 +129,26 @@ jobs:
               echo "⚠️ ${VERSION}: loong64 无二进制"
             fi
 
-            # Per-platform build & push (parallel)
-            TAGS=""
-            pids=()
-            failed=""
-            IFS=',' read -ra PLAT_LIST <<< "${PLATFORMS}"
-            for plat in "${PLAT_LIST[@]}"; do
-              plat_tag="${plat//\//-}"
-              log="/tmp/build-${plat_tag}.log"
-              (
-                echo "  Building ${plat}..."
-                docker buildx build \
-                  --platform "${plat}" \
-                  --cache-from type=gha \
-                  --cache-to type=gha,mode=max \
-                  --build-arg KOMARI_VERSION=$VERSION \
-                  --provenance=false --sbom=false \
-                  -t ${IMAGE_NAME}:${VERSION}-${plat_tag} \
-                  --push \
-                  . > "$log" 2>&1
-                echo "  ✅ ${plat} done"
-              ) &
-              pids+=($!)
-              TAGS="${TAGS} ${IMAGE_NAME}:${VERSION}-${plat_tag}"
-            done
+            # Multi-platform build & push (internally parallel)
+            docker buildx build \
+              --platform ${PLATFORMS} \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
+              --build-arg KOMARI_VERSION=${VERSION} \
+              --provenance=false --sbom=false \
+              -t ${IMAGE_NAME}:${VERSION} \
+              --push \
+              . || { echo "❌ 版本 $VERSION 构建失败"; continue; }
 
-            for pid in "${pids[@]}"; do
-              wait "$pid" || failed=1
+            # Verify manifest
+            for i in 1 2 3; do
+              sleep 5
+              if docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
+                echo "✅ Manifest verified"
+                break
+              fi
+              echo "⚠️  Attempt $i: manifest not ready..."
             done
-
-            if [ -n "$failed" ]; then
-              echo "❌ 部分平台构建失败，跳过版本 $VERSION"
-              continue
-            fi
 
             # Combine into multi-arch manifest
             docker buildx imagetools create -t ${IMAGE_NAME}:${VERSION} ${TAGS}

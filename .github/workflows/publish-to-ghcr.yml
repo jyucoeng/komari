@@ -108,46 +108,32 @@ jobs:
             echo "PLATFORMS=${PLATFORMS}" >> "$GITHUB_ENV"
           fi
 
-      - name: 📦 Build and push (parallel per-platform)
+      - name: 📦 Build and Push (multi-platform)
         if: env.SKIP_BUILD != 'true'
         run: |
-          VERSION="${{ env.KOMARI_VERSION }}"
-          IMAGE_NAME="${{ env.IMAGE_NAME }}"
-          IFS=',' read -ra PLATS <<< "${{ env.PLATFORMS }}"
+          docker buildx build \
+            --platform ${{ env.PLATFORMS }} \
+            --build-arg KOMARI_VERSION=${{ env.KOMARI_VERSION }} \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --provenance=false --sbom=false \
+            -t ${{ env.IMAGE_NAME }}:${{ env.KOMARI_VERSION }} \
+            --push \
+            .
 
-          pids=()
-          for plat in "${PLATS[@]}"; do
-            plat_tag="${plat//\//-}"
-            log="/tmp/build-${plat_tag}.log"
-            (
-              echo "▶️ Building ${plat}..."
-              docker buildx build \
-                --platform "${plat}" \
-                --build-arg KOMARI_VERSION="${VERSION}" \
-                --cache-from type=gha \
-                --cache-to type=gha,mode=max \
-                --provenance=false --sbom=false \
-                -t "${IMAGE_NAME}:${VERSION}-${plat_tag}" \
-                --push \
-                . > "$log" 2>&1
-              echo "✅ ${plat} done"
-            ) &
-            pids+=($!)
+      - name: 🔍 Verify manifest
+        if: success() && env.SKIP_BUILD != 'true'
+        run: |
+          for i in 1 2 3; do
+            sleep 5
+            if docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ env.KOMARI_VERSION }} >/dev/null 2>&1; then
+              echo "✅ Manifest verified"
+              exit 0
+            fi
+            echo "⚠️  Attempt $i: manifest not ready, retrying..."
           done
-
-          failed=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || failed=1
-          done
-
-          echo ""
-          for plat in "${PLATS[@]}"; do
-            plat_tag="${plat//\//-}"
-            echo "--- ${plat_tag} log ---"
-            cat "/tmp/build-${plat_tag}.log"
-          done
-
-          [ "$failed" -eq 1 ] && echo "❌ Some platforms failed" && exit 1
+          echo "❌ Manifest verification failed after 3 retries"
+          exit 1
 
       - name: 🔗 Create combined multi-arch manifest
         if: success() && env.SKIP_BUILD != 'true'
