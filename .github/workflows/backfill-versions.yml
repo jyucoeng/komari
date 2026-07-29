@@ -111,6 +111,18 @@ jobs:
             else
               echo "⚠️ 上游版本 ${VERSION} 无 komari-linux-386 二进制，跳过 386 架构"
             fi
+            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-riscv64" 2>/dev/null; then
+              PLATFORMS="${PLATFORMS},linux/riscv64"
+              echo "✅ 上游版本 ${VERSION} 支持 riscv64 架构"
+            else
+              echo "⚠️ 上游版本 ${VERSION} 无 komari-linux-riscv64 二进制，跳过 riscv64 架构"
+            fi
+            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-loong64" 2>/dev/null; then
+              PLATFORMS="${PLATFORMS},linux/loong64"
+              echo "✅ 上游版本 ${VERSION} 支持 loong64 架构"
+            else
+              echo "⚠️ 上游版本 ${VERSION} 无 komari-linux-loong64 二进制，跳过 loong64 架构"
+            fi
 
             docker buildx build \
               --platform ${PLATFORMS} \
@@ -149,7 +161,7 @@ jobs:
           import subprocess, json, os
 
           image_name = os.environ.get('IMAGE_NAME', '')
-          up_arches = ['amd64', 'arm64', 'arm', '386', 'riscv64']
+          up_arches = ['amd64', 'arm64', 'arm', '386', 'riscv64', 'loong64']
 
           versions = []
           with open('/tmp/versions.txt') as f:

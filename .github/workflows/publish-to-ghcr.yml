@@ -88,6 +88,18 @@ jobs:
             else
               echo "⚠️ 上游版本 ${KOMARI_VERSION} 无 komari-linux-386 二进制，跳过 386 架构"
             fi
+            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-riscv64" 2>/dev/null; then
+              PLATFORMS="${PLATFORMS},linux/riscv64"
+              echo "✅ 上游版本 ${KOMARI_VERSION} 支持 riscv64 架构，将构建 linux/riscv64"
+            else
+              echo "⚠️ 上游版本 ${KOMARI_VERSION} 无 komari-linux-riscv64 二进制，跳过 riscv64 架构"
+            fi
+            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${KOMARI_VERSION}/komari-linux-loong64" 2>/dev/null; then
+              PLATFORMS="${PLATFORMS},linux/loong64"
+              echo "✅ 上游版本 ${KOMARI_VERSION} 支持 loong64 架构，将构建 linux/loong64"
+            else
+              echo "⚠️ 上游版本 ${KOMARI_VERSION} 无 komari-linux-loong64 二进制，跳过 loong64 架构"
+            fi
             echo "PLATFORMS=${PLATFORMS}" >> "$GITHUB_ENV"
           fi
 
@@ -116,7 +128,7 @@ jobs:
 
           # Upstream binary support
           BINS=""
-          for arch in amd64 arm64 arm 386 riscv64; do
+          for arch in amd64 arm64 arm 386 riscv64 loong64; do
             if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-${arch}" 2>/dev/null; then
               BINS="${BINS}\`${arch}\`, "
             fi

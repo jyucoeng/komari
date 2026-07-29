@@ -17,6 +17,7 @@ RUN set -eux; \
         arm*|armv7*|armhf) arch="arm" ;; \
         386|i386|x86) arch="386" ;; \
         riscv64) arch="riscv64" ;; \
+        loong64) arch="loong64" ;; \
         *) echo "Unsupported architecture: ${TARGETARCH:-$(apk --print-arch)}${TARGETVARIANT:-}" >&2; exit 1 ;; \
     esac; \
     \
