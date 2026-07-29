@@ -176,7 +176,7 @@ jobs:
                   try:
                       manifest = json.loads(r.stdout)
                       platforms = []
-                      if isinstance(manifest, dict) and manifest.get('mediaType', '').startswith('application/vnd.docker.distribution.manifest.list'):
+                      if isinstance(manifest, dict) and 'manifests' in manifest:
                           for m in manifest.get('manifests', []):
                               plat = m.get('platform', {})
                               p = f"{plat.get('os', 'linux')}/{plat.get('architecture', '')}"

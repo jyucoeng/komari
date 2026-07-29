@@ -131,10 +131,10 @@ jobs:
           OURS=$(docker manifest inspect ${IMAGE_NAME}:${VERSION} 2>/dev/null | python3 -c "
           import json,sys
           m=json.load(sys.stdin)
-          if isinstance(m,dict) and m.get('mediaType','').startswith('application/vnd.docker.distribution.manifest.list'):
-              for p in m.get('manifests',[]):
+          if isinstance(m,dict) and 'manifests' in m:
+              for p in m['manifests']:
                   plat=p.get('platform',{})
-                  print(f\"✅ {plat.get('os','')}/{plat.get('architecture','')}{'/'+plat.get('variant','') if plat.get('variant') else ''}\")
+                  print('✅ {}/{}'.format(plat.get('os',''), plat.get('architecture','')) + ('/'+plat.get('variant','') if plat.get('variant') else ''))
           " 2>/dev/null) || OURS="❌"
 
           echo ""
