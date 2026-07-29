@@ -447,11 +447,14 @@ jobs:
           done
 
           python3 <<'PYEOF'
-          import json, subprocess, os
+          import json, subprocess, os, base64, urllib.request
           from collections import Counter
 
           token = os.environ['TOKEN']
           package_name = os.environ['PACKAGE_NAME']
+          repo = os.environ.get('REPOSITORY', '').lower()
+          if not repo:
+              repo = f"jyucoeng/{package_name}"
 
           data = json.load(open('/tmp/all_versions.json'))
           print(f"共获取 {len(data)} 条版本记录")
@@ -465,9 +468,10 @@ jobs:
               tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
               vid = v.get('id')
               created = v.get('created_at', '')
+              digest = v.get('name', '')
 
               if not tags:
-                  untagged.append((vid, created))
+                  untagged.append((vid, created, digest))
               else:
                   for tag in tags:
                       if tag not in tag_latest or created > tag_latest[tag][1]:
@@ -477,22 +481,69 @@ jobs:
           for vid, _ in tag_latest.values():
               keep_ids.add(vid)
 
+          # 查询每个保留的 manifest list 引用的子 manifest digest
+          print("检查被 manifest list 引用的子 manifest...")
+          referenced_digests = set()
+          for tag, (vid, _) in tag_latest.items():
+              if tag == 'latest':
+                  continue
+              try:
+                  auth_str = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+                  req = urllib.request.Request(
+                      f"https://ghcr.io/token?scope=repository:{repo}:pull")
+                  req.add_header("Authorization", f"Basic {auth_str}")
+                  bearer = json.loads(urllib.request.urlopen(req).read())["token"]
+
+                  manifest_url = f"https://ghcr.io/v2/{repo}/manifests/{tag}"
+                  req = urllib.request.Request(manifest_url)
+                  req.add_header("Authorization", f"Bearer {bearer}")
+                  req.add_header("Accept",
+                      "application/vnd.oci.image.index.v1+json,"
+                      "application/vnd.docker.distribution.manifest.list.v2+json,"
+                      "application/vnd.oci.image.manifest.v1+json,"
+                      "application/vnd.docker.distribution.manifest.v2+json")
+
+                  resp = urllib.request.urlopen(req, timeout=30)
+                  manifest = json.loads(resp.read())
+                  if 'manifests' in manifest:
+                      for m in manifest['manifests']:
+                          referenced_digests.add(m['digest'])
+                  print(f"  ✅ {tag}: 引用 {len(manifest.get('manifests', []))} 个子 manifest")
+              except Exception as e:
+                  print(f"  ⚠️  {tag}: 跳过 - {e}")
+
+          print(f"被引用的子 manifest digest 数: {len(referenced_digests)}")
+
+          # 构建 untagged digest → vid 映射
+          untagged_vid_by_digest = {}
+          for vid, created, digest in untagged:
+              if digest:
+                  untagged_vid_by_digest[digest] = vid
+
           to_delete = []
+          kept_untagged = 0
           for v in data:
               if not isinstance(v, dict):
                   continue
               tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
               vid = v.get('id')
-              # 跳过 untagged 版本（它们可能是多架构镜像的子 manifest，被 manifest list 引用）
+              digest = v.get('name', '')
+
               if not tags:
+                  # untagged: 只删未被 manifest list 引用的 orphan
+                  if digest in referenced_digests:
+                      kept_untagged += 1
+                      continue
+                  to_delete.append(vid)
                   continue
+
               if vid in keep_ids:
                   continue
               to_delete.append(vid)
 
-          print(f"保留 {len(keep_ids)} 个版本（每个标签最新）")
-          print(f"跳过 {len(untagged)} 个 untagged 版本（平台子 manifest）")
-          print(f"需要删除: {len(to_delete)} 个")
+          print(f"保留 {len(keep_ids)} 个带标签版本（每个标签最新）")
+          print(f"保留 {kept_untagged} 个被引用的 untagged 版本（平台子 manifest）")
+          print(f"删除 {len(to_delete)} 个无引用的 untagged 或旧版本")
 
           deleted = 0
           for vid in to_delete:
@@ -506,7 +557,7 @@ jobs:
               if deleted % 10 == 0:
                   print(f"  已删除 {deleted} 个...")
 
-          print(f"清理完成，共删除 {deleted} 个旧镜像")
+          print(f"清理完成，共删除 {deleted} 个")
 
           print("\n=== 当前各版本镜像数量 ===")
           tag_counts = Counter()
@@ -548,3 +599,4 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGE_NAME: ${{ github.event.repository.name }}
+          REPOSITORY: ${{ github.repository }}
