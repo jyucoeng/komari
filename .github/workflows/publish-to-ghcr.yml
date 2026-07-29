@@ -108,27 +108,37 @@ jobs:
             echo "PLATFORMS=${PLATFORMS}" >> "$GITHUB_ENV"
           fi
 
-      - name: 📦 Build and push per-platform
+      - name: 📦 Build and push (parallel per-platform)
         if: env.SKIP_BUILD != 'true'
         run: |
           VERSION="${{ env.KOMARI_VERSION }}"
           IMAGE_NAME="${{ env.IMAGE_NAME }}"
           IFS=',' read -ra PLATS <<< "${{ env.PLATFORMS }}"
-          TAGS=""
+
+          pids=()
           for plat in "${PLATS[@]}"; do
             plat_tag="${plat//\//-}"
-            echo "Building ${plat}..."
-            docker buildx build \
-              --platform "${plat}" \
-              --build-arg KOMARI_VERSION="${VERSION}" \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max \
-              --provenance=false --sbom=false \
-              -t "${IMAGE_NAME}:${VERSION}-${plat_tag}" \
-              --push \
-              .
-            TAGS="${TAGS} ${IMAGE_NAME}:${VERSION}-${plat_tag}"
+            (
+              echo "▶️ Building ${plat}..."
+              docker buildx build \
+                --platform "${plat}" \
+                --build-arg KOMARI_VERSION="${VERSION}" \
+                --cache-from type=gha \
+                --cache-to type=gha,mode=max \
+                --provenance=false --sbom=false \
+                -t "${IMAGE_NAME}:${VERSION}-${plat_tag}" \
+                --push \
+                . 2>&1 | sed "s/^/[${plat_tag}] /"
+              echo "✅ ${plat} done"
+            ) &
+            pids+=($!)
           done
+
+          failed=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || failed=1
+          done
+          [ "$failed" -eq 1 ] && echo "❌ Some platforms failed" && exit 1
 
       - name: 🔗 Create combined multi-arch manifest
         if: success() && env.SKIP_BUILD != 'true'
