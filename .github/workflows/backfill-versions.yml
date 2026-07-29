@@ -105,6 +105,7 @@ jobs:
             echo "========== 构建版本 $VERSION =========="
 
             docker buildx build \
+              --platform linux/amd64,linux/arm64,linux/arm/v7 \
               --cache-from type=gha \
               --cache-to type=gha,mode=max \
               --build-arg KOMARI_VERSION=$VERSION \
