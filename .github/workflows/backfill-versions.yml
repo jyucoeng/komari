@@ -478,19 +478,20 @@ jobs:
               keep_ids.add(vid)
 
           to_delete = []
-          for vid, _ in untagged:
-              to_delete.append(vid)
           for v in data:
               if not isinstance(v, dict):
                   continue
               tags = v.get('metadata', {}).get('container', {}).get('tags', []) if v.get('metadata') else []
               vid = v.get('id')
+              # 跳过 untagged 版本（它们可能是多架构镜像的子 manifest，被 manifest list 引用）
+              if not tags:
+                  continue
               if vid in keep_ids:
                   continue
-              if tags:
-                  to_delete.append(vid)
+              to_delete.append(vid)
 
           print(f"保留 {len(keep_ids)} 个版本（每个标签最新）")
+          print(f"跳过 {len(untagged)} 个 untagged 版本（平台子 manifest）")
           print(f"需要删除: {len(to_delete)} 个")
 
           deleted = 0
