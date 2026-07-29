@@ -2,32 +2,33 @@ name: 📦 backfill-versions
 
 on:
   workflow_dispatch:
+    inputs:
+      # ─── 调参入口：并行构建组数 ───
+      # 版本列表会按 round-robin 均匀分到 N 个 job 同时构建。
+      # 建议值：4~12。越大越快，但 GHCR 可能限流。
+      # 默认为 12，每组约 5 个版本，预计 10~15 分钟跑完。
+      groups:
+        description: '并行构建组数'
+        required: false
+        default: 12
+        type: number
 
 jobs:
-  backfill:
+  # ═══════════════════════════════════════════════
+  # Job 1: discover — 获取上游 release 列表并分组
+  # 只跑一次，不构建镜像，纯信息收集。
+  # 输出: 版本列表、最大版本、分组数据
+  # ═══════════════════════════════════════════════
+  discover:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
-
+    outputs:
+      max_version: ${{ steps.gen.outputs.max_version }}
+      all_versions_json: ${{ steps.gen.outputs.all_versions_json }}
+      groups_json: ${{ steps.gen.outputs.groups_json }}
+      group_indices: ${{ steps.gen.outputs.group_indices }}
     steps:
-      - name: ⬇️ Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: 🏷️ Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: 🛠️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔑 Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: 🧭 获取上游所有 release 版本
+      - name: 🧭 获取上游所有 release 版本并分组
+        id: gen
         run: |
           rm -f /tmp/releases.json /tmp/versions.txt /tmp/max_version.txt
 
@@ -83,16 +84,86 @@ jobs:
 
           print(f'共发现 {len(sorted_tags)} 个版本')
           print(f'最大版本: {max_version}')
-          print('构建顺序:')
-          for i, v in enumerate(sorted_tags, 1):
-              print(f'  {i}. {v}')
           PYEOF
 
           rm -f /tmp/releases.json /tmp/page.json
 
-      - name: 📦 构建并推送所有版本镜像
+            # ─── round-robin 分组 ───
+            # 例: 15 个版本分 4 组 → 各组 [0,4,8,12], [1,5,9,13], [2,6,10,14], [3,7,11]
+            # 空组会被过滤掉，不会创建无用的 build job
+            GROUPS=${{ inputs.groups || 12 }}
+
+          python3 <<-PYEOF
+          import json, os
+
+          with open('/tmp/versions.txt') as f:
+              versions = [line.strip() for line in f if line.strip()]
+
+          n = int(os.environ.get('GROUPS', '12'))
+          if n < 1:
+              n = 1
+          if n > len(versions):
+              n = len(versions)
+
+          groups = [[] for _ in range(n)]
+          for i, v in enumerate(versions):
+              groups[i % n].append(v)
+          groups = [g for g in groups if g]
+
+          max_ver = versions[-1] if versions else ''
+
+          with open(os.environ.get('GITHUB_OUTPUT'), 'a') as f:
+              f.write(f'max_version={max_ver}\n')
+              f.write(f'all_versions_json={json.dumps(versions)}\n')
+              f.write(f'groups_json={json.dumps(groups)}\n')
+              f.write(f'group_indices={json.dumps(list(range(len(groups))))}\n')
+
+          print(f'分割为 {len(groups)} 组，每组 ~{max(1, len(versions)//len(groups))} 个版本')
+          PYEOF
+        env:
+          GROUPS: ${{ inputs.groups || 12 }}
+
+  # ═══════════════════════════════════════════════
+  # Job 2: build — 矩阵 job，每个 job 构建一组版本
+  # 根据 discover 的 group_indices 动态展开。
+  # 各组之间完全独立，无竞态。
+  # ═══════════════════════════════════════════════
+  build:
+    needs: [discover]
+    if: needs.discover.result == 'success'
+    strategy:
+      # ─── 矩阵展开 ───
+      # group_indices = [0, 1, 2, ..., N-1]
+      # 每个 index 对应 groups_json[index] 里的版本列表
+      matrix:
+        index: ${{ fromJSON(needs.discover.outputs.group_indices) }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: 📦 构建组内版本镜像
+        env:
+          GROUPS_JSON: ${{ needs.discover.outputs.groups_json }}
+          MATRIX_INDEX: ${{ matrix.index }}
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+
+          VERSIONS=$(python3 -c "
+          import json, os
+          groups = json.loads(os.environ['GROUPS_JSON'])
+          idx = int(os.environ['MATRIX_INDEX'])
+          for v in groups[idx]:
+              print(v)
+          ")
 
           while IFS= read -r VERSION; do
             [ -z "$VERSION" ] && continue
@@ -102,8 +173,11 @@ jobs:
               continue
             fi
 
-            echo "========== 构建版本 $VERSION =========="
+            echo "========== [组 $MATRIX_INDEX] 构建版本 $VERSION =========="
 
+            # ─── 调参入口：支持的架构列表 ───
+            # amd64 + arm64 始终开启（upstream 自始就有）。
+            # 需要增减平台时，仿照 386/riscv64 的写法加 if/wget 判断。
             PLATFORMS="linux/amd64,linux/arm64"
 
             # 386
@@ -152,12 +226,38 @@ jobs:
 
             echo "版本 $VERSION 构建完成"
             echo ""
-          done < /tmp/versions.txt
+          done <<< "$VERSIONS"
+
+  # ═══════════════════════════════════════════════
+  # Job 3: finalize — 收尾工作
+  # 等所有 build job 完成后执行：
+  #   1. 把 latest 标签指向最大版本
+  #   2. 生成 allVersion.md 报告
+  #   3. 提交报告到仓库
+  #   4. 清理 GHCR 上的旧版本镜像
+  # ═══════════════════════════════════════════════
+  finalize:
+    needs: [discover, build]
+    if: needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: 🏷️ 设置 latest 标签到最大版本
+        if: needs.discover.outputs.max_version != ''
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
-          MAX_VERSION=$(cat /tmp/max_version.txt)
+          MAX_VERSION="${{ needs.discover.outputs.max_version }}"
 
           echo "设置 latest 标签到版本 $MAX_VERSION"
 
@@ -169,6 +269,8 @@ jobs:
 
       - name: 📊 Generate allVersion.md report
         continue-on-error: true
+        env:
+          ALL_VERSIONS_JSON: ${{ needs.discover.outputs.all_versions_json }}
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
 
@@ -176,16 +278,11 @@ jobs:
           import subprocess, json, os
 
           image_name = os.environ.get('IMAGE_NAME', '')
-          up_arches = ['amd64', 'arm64', 'arm', '386', 'riscv64', 'loong64']
-
-          versions = []
-          with open('/tmp/versions.txt') as f:
-              for line in f:
-                  line = line.strip()
-                  if line:
-                      versions.append(line)
-
+          all_versions_json = os.environ.get('ALL_VERSIONS_JSON', '[]')
+          versions = json.loads(all_versions_json)
           versions.reverse()
+
+          up_arches = ['amd64', 'arm64', 'arm', '386', 'riscv64', 'loong64']
 
           rows = []
           for v in versions:
@@ -223,7 +320,7 @@ jobs:
           lines.append("# Komari Multi-Arch Support Status")
           lines.append("")
           import datetime
-          lines.append(f"Generated at: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+          lines.append(f"Generated at: {datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}")
           lines.append("")
           lines.append("## Column Description")
           lines.append("")
@@ -267,6 +364,7 @@ jobs:
             echo "allVersion.md unchanged, nothing to commit"
           else
             git commit -m "Update allVersion.md"
+            git pull --rebase
             git push
             echo "Committed and pushed allVersion.md"
           fi
@@ -402,7 +500,7 @@ jobs:
           print(f"  总计: {sum(tag_counts.values())} 个")
           PYEOF
 
-          rm -f /tmp/all_versions.json /tmp/page.json /tmp/versions.txt /tmp/max_version.txt
+          rm -f /tmp/all_versions.json /tmp/page.json
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGE_NAME: ${{ github.event.repository.name }}
