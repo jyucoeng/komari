@@ -329,24 +329,18 @@ jobs:
                   row[f'bin_{arch}'] = r.returncode == 0
 
               r = subprocess.run(
-                  ['docker', 'manifest', 'inspect', f'{image_name}:{v}'],
+                  ['docker', 'buildx', 'imagetools', 'inspect', f'{image_name}:{v}'],
                   capture_output=True, text=True, timeout=30)
               if r.returncode == 0:
                   row['our_image'] = True
-                  try:
-                      manifest = json.loads(r.stdout)
-                      platforms = []
-                      if isinstance(manifest, dict) and 'manifests' in manifest:
-                          for m in manifest.get('manifests', []):
-                              plat = m.get('platform', {})
-                              p = f"{plat.get('os', 'linux')}/{plat.get('architecture', '')}"
-                              variant = plat.get('variant', '')
-                              if variant:
-                                  p += f"/{variant}"
+                  platforms = []
+                  for line in r.stdout.split('\n'):
+                      line = line.strip()
+                      if '/linux' in line and 'Digest:' in line:
+                          p = line.split()[0].rstrip(':')
+                          if p not in platforms:
                               platforms.append(p)
-                      row['our_platforms'] = platforms
-                  except (json.JSONDecodeError, KeyError):
-                      row['our_platforms'] = []
+                  row['our_platforms'] = platforms
               else:
                   row['our_image'] = False
                   row['our_platforms'] = []
