@@ -7,7 +7,7 @@ jobs:
   backfill:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -139,6 +139,110 @@ jobs:
             ${IMAGE_NAME}:${MAX_VERSION}
 
           echo "latest 标签已指向 $MAX_VERSION"
+
+      - name: 📊 Generate allVersion.md report
+        continue-on-error: true
+        run: |
+          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+
+          python3 <<'PYEOF'
+          import subprocess, json, os
+
+          image_name = os.environ.get('IMAGE_NAME', '')
+          up_arches = ['amd64', 'arm64', 'arm', '386', 'riscv64']
+
+          versions = []
+          with open('/tmp/versions.txt') as f:
+              for line in f:
+                  line = line.strip()
+                  if line:
+                      versions.append(line)
+
+          versions.reverse()
+
+          rows = []
+          for v in versions:
+              row = {'version': v}
+              r = subprocess.run(['docker', 'manifest', 'inspect', f'ghcr.io/komari-monitor/komari:{v}'], capture_output=True, text=True)
+              row['upstream_image'] = r.returncode == 0
+
+              for arch in up_arches:
+                  r = subprocess.run(['wget', '-q', '--spider', f'https://github.com/komari-monitor/komari/releases/download/{v}/komari-linux-{arch}'], capture_output=True)
+                  row[f'bin_{arch}'] = r.returncode == 0
+
+              r = subprocess.run(['docker', 'manifest', 'inspect', f'{image_name}:{v}'], capture_output=True, text=True)
+              if r.returncode == 0:
+                  row['our_image'] = True
+                  try:
+                      manifest = json.loads(r.stdout)
+                      platforms = []
+                      if isinstance(manifest, dict) and manifest.get('mediaType', '').startswith('application/vnd.docker.distribution.manifest.list'):
+                          for m in manifest.get('manifests', []):
+                              plat = m.get('platform', {})
+                              p = f"{plat.get('os', 'linux')}/{plat.get('architecture', '')}"
+                              variant = plat.get('variant', '')
+                              if variant:
+                                  p += f"/{variant}"
+                              platforms.append(p)
+                      row['our_platforms'] = platforms
+                  except (json.JSONDecodeError, KeyError):
+                      row['our_platforms'] = []
+              else:
+                  row['our_image'] = False
+                  row['our_platforms'] = []
+              rows.append(row)
+
+          lines = []
+          lines.append("# Komari Multi-Arch Support Status")
+          lines.append("")
+          import datetime
+          lines.append(f"Generated at: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+          lines.append("")
+          lines.append("## Column Description")
+          lines.append("")
+          lines.append("| Column | Meaning |")
+          lines.append("|--------|---------|")
+          lines.append("| `Version` | Upstream release version tag |")
+          lines.append("| `Upstream Image` | Whether `ghcr.io/komari-monitor/komari:{version}` Docker image exists upstream |")
+          lines.append("| `Upstream Binary Support` | Which architecture binaries are available in the upstream GitHub Release |")
+          lines.append("| `Our Image` | Whether `ghcr.io/{{repo}}:{version}` has been built and pushed |")
+          lines.append("| `Our Build Platforms` | Which platform images are included in our multi-arch manifest |")
+          lines.append("")
+          lines.append("## Status Table")
+          lines.append("")
+          lines.append("| Version | Upstream Image | Upstream Binary Support | Our Image | Our Build Platforms |")
+          lines.append("|---------|:--------------:|-------------------------|:---------:|---------------------|")
+
+          for row in rows:
+              v = row['version']
+              upstream_img = "✅" if row['upstream_image'] else "❌"
+              bin_parts = [f"`{a}`" for a in up_arches if row[f'bin_{a}']]
+              upstream_bins = ", ".join(bin_parts) if bin_parts else "—"
+              our_img = "✅" if row['our_image'] else "❌"
+              our_platforms = ", ".join(f"`{p}`" for p in row['our_platforms']) if row['our_platforms'] else "—"
+              lines.append(f"| {v} | {upstream_img} | {upstream_bins} | {our_img} | {our_platforms} |")
+
+          lines.append("")
+          report = "\n".join(lines)
+          with open('/tmp/allVersion.md', 'w') as f:
+              f.write(report)
+          print(f"Report generated: {len(rows)} versions")
+          PYEOF
+
+          cp /tmp/allVersion.md allVersion.md
+
+      - name: 🚀 Commit allVersion.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add allVersion.md
+          if git diff --staged --quiet; then
+            echo "allVersion.md unchanged, nothing to commit"
+          else
+            git commit -m "Update allVersion.md"
+            git push
+            echo "Committed and pushed allVersion.md"
+          fi
 
       - name: 🧹 清理旧版本镜像
         run: |

@@ -108,6 +108,52 @@ jobs:
           provenance: false
           sbom: false
 
+      - name: 📋 Print build report
+        if: success() && env.SKIP_BUILD != 'true'
+        run: |
+          VERSION="${{ env.KOMARI_VERSION }}"
+          IMAGE_NAME="${{ env.IMAGE_NAME }}"
+
+          # Upstream binary support
+          BINS=""
+          for arch in amd64 arm64 arm 386 riscv64; do
+            if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-${arch}" 2>/dev/null; then
+              BINS="${BINS}\`${arch}\`, "
+            fi
+          done
+          BINS="${BINS%, }"
+
+          # Upstream image
+          UP_IMG="❌"
+          docker manifest inspect ghcr.io/komari-monitor/komari:${VERSION} >/dev/null 2>&1 && UP_IMG="✅"
+
+          # Our manifest platforms
+          OURS=$(docker manifest inspect ${IMAGE_NAME}:${VERSION} 2>/dev/null | python3 -c "
+          import json,sys
+          m=json.load(sys.stdin)
+          if isinstance(m,dict) and m.get('mediaType','').startswith('application/vnd.docker.distribution.manifest.list'):
+              for p in m.get('manifests',[]):
+                  plat=p.get('platform',{})
+                  print(f\"✅ {plat.get('os','')}/{plat.get('architecture','')}{'/'+plat.get('variant','') if plat.get('variant') else ''}\")
+          " 2>/dev/null) || OURS="❌"
+
+          echo ""
+          echo "══════════════════════ Build Report ══════════════════════"
+          printf "%-22s │ %s\n" "Version" "${VERSION}"
+          printf "%-22s │ %s\n" "Upstream Image" "${UP_IMG}"
+          printf "%-22s │ %s\n" "Upstream Binaries" "${BINS:---}"
+          echo "──────────────────────────────────────────────────────────"
+          echo "Our Build Platforms:"
+          echo "${OURS}"
+          echo "══════════════════════════════════════════════════════════"
+          echo ""
+          echo "Table Guide:"
+          echo "  Version          - Upstream release version tag"
+          echo "  Upstream Image   - Whether ghcr.io/komari-monitor/komari:VERSION exists"
+          echo "  Upstream Binaries - Which arch binaries upstream GitHub Release provides"
+          echo "  Our Build Platf. - Which platforms in our pushed multi-arch manifest"
+          echo "══════════════════════════════════════════════════════════"
+
       - name: 🏷️ 设置 latest 标签
         if: success() && env.KOMARI_VERSION != 'latest' && env.SKIP_BUILD != 'true'
         run: |
