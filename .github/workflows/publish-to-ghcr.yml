@@ -108,22 +108,40 @@ jobs:
             echo "PLATFORMS=${PLATFORMS}" >> "$GITHUB_ENV"
           fi
 
-      - name: 📦 Build and Push Docker Image
+      - name: 📦 Build and push per-platform
         if: env.SKIP_BUILD != 'true'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          platforms: ${{ env.PLATFORMS }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.KOMARI_VERSION }}
-          build-args: |
-            KOMARI_VERSION=${{ env.KOMARI_VERSION }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
+        run: |
+          VERSION="${{ env.KOMARI_VERSION }}"
+          IMAGE_NAME="${{ env.IMAGE_NAME }}"
+          IFS=',' read -ra PLATS <<< "${{ env.PLATFORMS }}"
+          TAGS=""
+          for plat in "${PLATS[@]}"; do
+            plat_tag="${plat//\//-}"
+            echo "Building ${plat}..."
+            docker buildx build \
+              --platform "${plat}" \
+              --build-arg KOMARI_VERSION="${VERSION}" \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
+              --provenance=false --sbom=false \
+              -t "${IMAGE_NAME}:${VERSION}-${plat_tag}" \
+              --push \
+              .
+            TAGS="${TAGS} ${IMAGE_NAME}:${VERSION}-${plat_tag}"
+          done
+
+      - name: 🔗 Create combined multi-arch manifest
+        if: success() && env.SKIP_BUILD != 'true'
+        run: |
+          VERSION="${{ env.KOMARI_VERSION }}"
+          IMAGE_NAME="${{ env.IMAGE_NAME }}"
+          IFS=',' read -ra PLATS <<< "${{ env.PLATFORMS }}"
+          SOURCES=""
+          for plat in "${PLATS[@]}"; do
+            plat_tag="${plat//\//-}"
+            SOURCES="${SOURCES} ${IMAGE_NAME}:${VERSION}-${plat_tag}"
+          done
+          docker buildx imagetools create -t "${IMAGE_NAME}:${VERSION}" ${SOURCES}
 
       - name: 📋 Print build report
         if: success() && env.SKIP_BUILD != 'true'

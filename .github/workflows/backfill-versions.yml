@@ -129,16 +129,26 @@ jobs:
               echo "⚠️ ${VERSION}: loong64 无二进制"
             fi
 
-            docker buildx build \
-              --platform ${PLATFORMS} \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max \
-              --build-arg KOMARI_VERSION=$VERSION \
-              -t ${IMAGE_NAME}:${VERSION} \
-              --attest type=provenance,disabled=true \
-              --attest type=sbom,disabled=true \
-              --push \
-              .
+            # Per-platform build & push
+            TAGS=""
+            IFS=',' read -ra PLAT_LIST <<< "${PLATFORMS}"
+            for plat in "${PLAT_LIST[@]}"; do
+              plat_tag="${plat//\//-}"
+              echo "  Building ${plat}..."
+              docker buildx build \
+                --platform "${plat}" \
+                --cache-from type=gha \
+                --cache-to type=gha,mode=max \
+                --build-arg KOMARI_VERSION=$VERSION \
+                --provenance=false --sbom=false \
+                -t ${IMAGE_NAME}:${VERSION}-${plat_tag} \
+                --push \
+                . || { echo "❌ ${plat} 构建失败，跳过"; continue; }
+              TAGS="${TAGS} ${IMAGE_NAME}:${VERSION}-${plat_tag}"
+            done
+
+            # Combine into multi-arch manifest
+            docker buildx imagetools create -t ${IMAGE_NAME}:${VERSION} ${TAGS}
 
             echo "版本 $VERSION 构建完成"
             echo ""
