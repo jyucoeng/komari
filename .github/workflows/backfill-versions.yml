@@ -274,6 +274,33 @@ jobs:
             echo "Committed and pushed allVersion.md"
           fi
 
+      - name: 🧹 Clean up per-platform (-linux-) tags
+        run: |
+          PKG_NAME="${{ github.event.repository.name }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          curl -s -H "Authorization: token $TOKEN" \
+            "https://api.github.com/user/packages/container/${PKG_NAME}/versions?per_page=100" \
+            | python3 -c "
+          import json, os, subprocess, sys
+          token = os.environ['TOKEN']
+          pkg = os.environ['PKG_NAME']
+          data = json.load(sys.stdin)
+          deleted = 0
+          for v in data:
+              tags = v.get('metadata', {}).get('container', {}).get('tags', [])
+              if any('-linux-' in t for t in tags):
+                  vid = v['id']
+                  subprocess.run(['curl', '-s', '-X', 'DELETE',
+                      '-H', f'Authorization: token {token}',
+                      f'https://api.github.com/user/packages/container/{pkg}/versions/{vid}'])
+                  deleted += 1
+                  print(f'  Deleted {tags}')
+          print(f'Cleaned {deleted} per-platform tags')
+          " 2>/dev/null
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PKG_NAME: ${{ github.event.repository.name }}
+
       - name: 🧹 清理旧版本镜像
         run: |
           PACKAGE_NAME=$(echo "${GITHUB_REPOSITORY,,}" | cut -d'/' -f2)
