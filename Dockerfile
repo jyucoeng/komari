@@ -1,24 +1,26 @@
 ARG KOMARI_VERSION=latest
 
-FROM alpine:3.21 AS base
+FROM debian:bookworm-slim AS base
 
 ARG KOMARI_VERSION
 ARG TARGETARCH
 ARG TARGETVARIANT
 
-RUN apk add --no-cache bash curl wget git sqlite jq tar supervisor coreutils unzip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash curl wget git sqlite3 jq tar supervisor coreutils unzip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
     \
     # Map buildx TARGETARCH to komari binary suffix
-    case "${TARGETARCH:-$(apk --print-arch)}${TARGETVARIANT:-}" in \
+    case "${TARGETARCH:-$(uname -m)}${TARGETVARIANT:-}" in \
         amd64|x86_64|"") arch="amd64" ;; \
         arm64|aarch64) arch="arm64" ;; \
         arm*|armv7*|armhf) arch="arm" ;; \
-        386|i386|x86) arch="386" ;; \
+        386|i386|i686|x86) arch="386" ;; \
         riscv64) arch="riscv64" ;; \
         loong64) arch="loong64" ;; \
-        *) echo "Unsupported architecture: ${TARGETARCH:-$(apk --print-arch)}${TARGETVARIANT:-}" >&2; exit 1 ;; \
+        *) echo "Unsupported architecture: ${TARGETARCH:-$(uname -m)}${TARGETVARIANT:-}" >&2; exit 1 ;; \
     esac; \
     \
     mkdir -p /usr/local/bin /app/bin; \
