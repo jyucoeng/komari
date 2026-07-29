@@ -29,9 +29,9 @@ RUN set -eux; \
     chmod +x /app/komari; \
     \
     # Pre-download caddy and cloudflared (entrypoint.sh falls back at runtime)
-    wget -q "https://github.com/caddyserver/caddy/releases/download/v2.9.1/caddy_2.9.1_linux_${arch}.tar.gz" -O /tmp/caddy.tar.gz; \
-    tar xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy; \
-    chmod +x /usr/local/bin/caddy; \
+    wget -q "https://github.com/caddyserver/caddy/releases/download/v2.9.1/caddy_2.9.1_linux_${arch}.tar.gz" -O /tmp/caddy.tar.gz || true; \
+    tar xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy 2>/dev/null || true; \
+    chmod +x /usr/local/bin/caddy 2>/dev/null || true; \
     \
     wget -q "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" -O /app/bin/cloudflared || true; \
     chmod +x /app/bin/cloudflared 2>/dev/null || true; \
