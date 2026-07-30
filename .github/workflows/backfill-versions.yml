@@ -336,8 +336,10 @@ jobs:
                   platforms = []
                   for line in r.stdout.split('\n'):
                       line = line.strip()
-                      if '/' in line and 'Digest:' in line:
-                          p = line.split()[0].rstrip(':')
+                      if not line:
+                          continue
+                      if '/' in line.split()[0]:
+                          p = line.split()[0]
                           if p not in platforms:
                               platforms.append(p)
                   row['our_platforms'] = platforms
