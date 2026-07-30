@@ -346,10 +346,7 @@ jobs:
                       platforms = []
                       for m in manifest['manifests']:
                           plat = m.get('platform', {})
-                          p = f"{plat.get('os', 'linux')}/{plat.get('architecture', '')}"
-                          variant = plat.get('variant', '')
-                          if variant:
-                              p += f"/{variant}"
+                           p = plat.get('architecture', '')
                           platforms.append(p)
                       return platforms
                   return []
