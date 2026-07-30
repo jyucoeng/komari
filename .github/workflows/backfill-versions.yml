@@ -346,7 +346,7 @@ jobs:
                       platforms = []
                       for m in manifest['manifests']:
                           plat = m.get('platform', {})
-                           p = plat.get('architecture', '')
+                          p = plat.get('architecture', '')
                           platforms.append(p)
                       return platforms
                   return []
