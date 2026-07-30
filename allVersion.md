@@ -1,6 +1,6 @@
 # Komari Multi-Arch Support Status
 
-Generated at: 2026-07-30 08:16:39 (北京时间)
+Generated at: 2026-07-30 08:38:08 (北京时间)
 
 ## Column Description
 
@@ -16,36 +16,36 @@ Generated at: 2026-07-30 08:16:39 (北京时间)
 
 | Version | Upstream Image | Upstream Binary Support | Our Image | Our Build Platforms |
 |---------|:--------------:|-------------------------|:---------:|---------------------|
-| 1.3.1 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | — |
-| 1.3.0 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | — |
-| 1.3.0-pre1 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | — |
-| 1.2.7 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | — |
-| 1.2.6 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.2.5-fix2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.2.5-fix1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.2.5 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.2.3 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.2.2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.2.1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.2.0 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.9 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.8 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.7 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.6 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.5a | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.5 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.4 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.3 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.2a | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.1b | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.1a | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.1.0 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.0.9 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.0.8-fix2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.0.7 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.0.6 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
-| 1.0.5-fix1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
+| 1.3.1 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.3.0 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.3.0-pre1 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.7 | ✅ | `amd64`, `arm64`, `386`, `riscv64`, `loong64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.6 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.5-fix2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.5-fix1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.5 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.3 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.2.0 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.9 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.8 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.7 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.6 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.5a | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.5 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.4 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.3 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.2a | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.1b | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.1a | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.1.0 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.0.9 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.0.8-fix2 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.0.7 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.0.6 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
+| 1.0.5-fix1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
 | 1.0.4-fix3 | ❌ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 1.0.3-fix1 | ❌ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 1.0.2 | ❌ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
@@ -62,11 +62,11 @@ Generated at: 2026-07-30 08:16:39 (北京时间)
 | 0.1.2-fix3 | ❌ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 0.1.2 | ❌ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
 | 0.1.1 | ❌ | `amd64`, `arm64`, `386`, `riscv64` | ❌ | — |
-| 0.1.0-fix1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | — |
+| 0.1.0-fix1 | ✅ | `amd64`, `arm64`, `386`, `riscv64` | ✅ | `linux/amd64`, `linux/arm64`, `linux/386`, `linux/riscv64` |
 | 0.1.0 | ❌ | `amd64`, `arm64` | ❌ | — |
 | 0.1.0-pre3 | ❌ | `amd64`, `arm64` | ❌ | — |
 | 0.1.0-prerelease | ❌ | `amd64`, `arm64` | ❌ | — |
-| 0.0.9 | ✅ | `amd64`, `arm64` | ✅ | — |
+| 0.0.9 | ✅ | `amd64`, `arm64` | ✅ | `linux/amd64`, `linux/arm64` |
 | 0.0.8 | ❌ | `amd64`, `arm64` | ❌ | — |
 | 0.0.7 | ❌ | `amd64`, `arm64` | ❌ | — |
 | 0.0.6 | ❌ | `amd64`, `arm64` | ❌ | — |
