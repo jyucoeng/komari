@@ -3,6 +3,10 @@ name: 📦 backfill-versions
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "0=跳过已存在 1=覆盖重建"
+        required: false
+        default: "0"
       groups:
         description: "Number of parallel build groups"
         required: false
@@ -182,7 +186,7 @@ jobs:
             PLATFORMS=$(echo "$PAYLOAD" | tail -1)
             [ -z "$VERSION" ] && continue
 
-            if docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
+            if [ "${{ github.event.inputs.mode }}" != "1" ] && docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
               echo "⏭️ 版本 $VERSION 已存在，跳过"
               continue
             fi
