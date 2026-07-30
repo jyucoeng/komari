@@ -56,7 +56,7 @@ Caddy (:8001)
 image: ghcr.io/jyucoeng/komari:latest
 ```
 
-或指定版本：
+或指定版本(建议使用1.2.5的版本)：
 
 ```yaml
 image: ghcr.io/jyucoeng/komari:1.2.5

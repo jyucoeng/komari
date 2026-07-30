@@ -301,17 +301,56 @@ jobs:
         env:
           ALL_VERSIONS_JSON: ${{ needs.discover.outputs.all_versions_json }}
           IMAGE_NAME: ghcr.io/${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           python3 <<'PYEOF'
-          import subprocess, json, os
+          import subprocess, json, os, base64, urllib.request
           from concurrent.futures import ThreadPoolExecutor, as_completed
 
           image_name = os.environ.get('IMAGE_NAME', '')
+          repo = os.environ.get('REPOSITORY', '').lower()
+          token = os.environ.get('TOKEN', '')
           all_versions_json = os.environ.get('ALL_VERSIONS_JSON', '[]')
           versions = json.loads(all_versions_json)
           versions.reverse()
 
           up_arches = ['amd64', 'arm64', 'arm', '386', 'riscv64', 'loong64']
+
+          def get_our_platforms(v):
+              """通过 GHCR Registry API 获取 manifest list 中的平台列表"""
+              try:
+                  auth_str = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+                  req = urllib.request.Request(
+                      f"https://ghcr.io/token?scope=repository:{repo}:pull")
+                  req.add_header("Authorization", f"Basic {auth_str}")
+                  bearer = json.loads(urllib.request.urlopen(req).read())["token"]
+
+                  manifest_url = f"https://ghcr.io/v2/{repo}/manifests/{v}"
+                  req = urllib.request.Request(manifest_url)
+                  req.add_header("Authorization", f"Bearer {bearer}")
+                  req.add_header("Accept",
+                      "application/vnd.oci.image.index.v1+json,"
+                      "application/vnd.docker.distribution.manifest.list.v2+json,"
+                      "application/vnd.oci.image.manifest.v1+json,"
+                      "application/vnd.docker.distribution.manifest.v2+json")
+
+                  resp = urllib.request.urlopen(req, timeout=30)
+                  manifest = json.loads(resp.read())
+
+                  if 'manifests' in manifest:
+                      platforms = []
+                      for m in manifest['manifests']:
+                          plat = m.get('platform', {})
+                          p = f"{plat.get('os', 'linux')}/{plat.get('architecture', '')}"
+                          variant = plat.get('variant', '')
+                          if variant:
+                              p += f"/{variant}"
+                          platforms.append(p)
+                      return platforms
+                  return []
+              except Exception:
+                  return None
 
           def check_version(v):
               row = {'version': v}
@@ -328,20 +367,9 @@ jobs:
                       capture_output=True, timeout=15)
                   row[f'bin_{arch}'] = r.returncode == 0
 
-              r = subprocess.run(
-                  ['docker', 'buildx', 'imagetools', 'inspect', f'{image_name}:{v}'],
-                  capture_output=True, text=True, timeout=30)
-              if r.returncode == 0:
+              platforms = get_our_platforms(v)
+              if platforms is not None:
                   row['our_image'] = True
-                  platforms = []
-                  for line in r.stdout.split('\n'):
-                      line = line.strip()
-                      if not line:
-                          continue
-                      if '/' in line.split()[0]:
-                          p = line.split()[0]
-                          if p not in platforms:
-                              platforms.append(p)
                   row['our_platforms'] = platforms
               else:
                   row['our_image'] = False
