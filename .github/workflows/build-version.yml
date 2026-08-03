@@ -1,0 +1,94 @@
+name: 🛠️ build-version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "要构建的版本号 (如 1.2.5-fix2，留空自动获取上游最新版)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🧭 确定版本号
+        id: version
+        run: |
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "VERSION=${INPUT_VERSION}" >> "$GITHUB_ENV"
+          else
+            LATEST=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/komari-monitor/komari/releases/latest" \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('tag_name',''))")
+            if [ -z "$LATEST" ]; then
+              echo "❌ 无法获取上游最新版本"
+              exit 1
+            fi
+            echo "VERSION=${LATEST}" >> "$GITHUB_ENV"
+          fi
+
+      - name: 🏷️ Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔑 Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: 🔍 检查上游二进制并构建
+        env:
+          KOMARI_VERSION: ${{ env.VERSION }}
+        run: |
+          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+          VERSION="${{ env.VERSION }}"
+          PLATFORMS="linux/amd64,linux/arm64"
+
+          if ! wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-amd64" 2>/dev/null; then
+            echo "❌ 上游无二进制 komari-linux-amd64 for ${VERSION}，无法构建"
+            exit 1
+          fi
+
+          # 386
+          if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-386" 2>/dev/null; then
+            PLATFORMS="${PLATFORMS},linux/386"
+            echo "✅ 386: 上游有二进制，加入构建"
+          else
+            echo "⚠️ 386: 跳过（上游无二进制）"
+          fi
+
+          # riscv64
+          if wget -q --spider "https://github.com/komari-monitor/komari/releases/download/${VERSION}/komari-linux-riscv64" 2>/dev/null; then
+            PLATFORMS="${PLATFORMS},linux/riscv64"
+            echo "✅ riscv64: 上游有二进制，加入构建"
+          else
+            echo "⚠️ riscv64: 跳过（上游无二进制）"
+          fi
+
+          echo "本次构建版本: ${VERSION}"
+          echo "构建平台: ${PLATFORMS}"
+
+          docker buildx build \
+            --platform ${PLATFORMS} \
+            --build-arg KOMARI_VERSION=${VERSION} \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --provenance=false --sbom=false \
+            -t ${IMAGE_NAME}:${VERSION} \
+            --push \
+            .
+
+          docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION}
+          echo "✅ ${VERSION} 构建并推送完成"

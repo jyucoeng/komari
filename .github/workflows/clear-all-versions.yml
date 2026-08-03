@@ -1,0 +1,94 @@
+name: 🧹 clear-all-versions
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "输入 yes 确认清除所有版本"
+        required: true
+        default: ""
+
+jobs:
+  clear:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: ⚠️ 确认清除
+        if: github.event.inputs.confirm != 'yes'
+        run: |
+          echo "❌ 未确认，取消操作（需在 inputs.confirm 输入 yes）"
+          exit 1
+
+      - name: 🗑️ 获取并删除所有版本
+        run: |
+          PACKAGE_NAME=$(echo "${GITHUB_REPOSITORY,,}" | cut -d'/' -f2)
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          echo "清除包 ${PACKAGE_NAME} 的所有版本..."
+
+          rm -f /tmp/all_versions.json /tmp/page.json
+          echo "[]" > /tmp/all_versions.json
+          PAGE=1
+          while true; do
+            curl -s -H "Authorization: token $TOKEN" \
+              "https://api.github.com/user/packages/container/${PACKAGE_NAME}/versions?per_page=100&page=$PAGE" \
+              > /tmp/page.json
+
+            COUNT=$(python3 -c "import json; d=json.load(open('/tmp/page.json')); print(len(d) if isinstance(d, list) else 0)" 2>/dev/null)
+            if [ -z "$COUNT" ] || [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+
+            python3 -c "
+          import json
+          existing = json.load(open('/tmp/all_versions.json'))
+          new_data = json.load(open('/tmp/page.json'))
+          if isinstance(new_data, list):
+              existing.extend(new_data)
+          json.dump(existing, open('/tmp/all_versions.json', 'w'))
+          "
+
+            PAGE=$((PAGE + 1))
+            if [ "$PAGE" -gt 50 ]; then
+              break
+            fi
+          done
+
+          python3 <<'PYEOF'
+          import json, subprocess, os
+
+          token = os.environ['TOKEN']
+          package_name = os.environ['PACKAGE_NAME']
+
+          data = json.load(open('/tmp/all_versions.json'))
+          print(f"共获取 {len(data)} 条版本记录")
+
+          ids = []
+          for v in data:
+              if isinstance(v, dict) and v.get('id'):
+                  ids.append(v['id'])
+
+          print(f"将删除 {len(ids)} 个版本...")
+          deleted = 0
+          failed = 0
+          for vid in ids:
+              r = subprocess.run(
+                  ['curl', '-s', '-X', 'DELETE',
+                   '-H', f'Authorization: token {token}',
+                   f'https://api.github.com/user/packages/container/{package_name}/versions/{vid}'],
+                  capture_output=True
+              )
+              if r.returncode == 0:
+                  deleted += 1
+              else:
+                  failed += 1
+              if deleted % 20 == 0 and deleted > 0:
+                  print(f"  已删除 {deleted} 个...")
+
+          print(f"删除完成：成功 {deleted} 个，失败 {failed} 个")
+          PYEOF
+
+          rm -f /tmp/all_versions.json /tmp/page.json
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE_NAME: ${{ github.event.repository.name }}

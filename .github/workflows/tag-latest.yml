@@ -1,0 +1,51 @@
+name: 🏷️ tag-latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "latest 要指向的版本号 (如 1.2.5-fix2)"
+        required: true
+        default: ""
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: 🔑 Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ 设置 latest 标签
+        run: |
+          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+          VERSION="${{ github.event.inputs.version }}"
+
+          if [ -z "$VERSION" ]; then
+            echo "❌ 未指定版本号"
+            exit 1
+          fi
+
+          if ! docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
+            echo "❌ 版本 ${VERSION} 不存在，无法设置 latest"
+            exit 1
+          fi
+
+          docker buildx imagetools create \
+            -t ${IMAGE_NAME}:latest \
+            ${IMAGE_NAME}:${VERSION}
+
+          CURRENT=$(docker buildx imagetools inspect ${IMAGE_NAME}:latest --format '{{.Manifest.Digest}}' 2>/dev/null || echo "")
+          TARGET=$(docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} --format '{{.Manifest.Digest}}' 2>/dev/null || echo "")
+
+          if [ -n "$CURRENT" ] && [ "$CURRENT" = "$TARGET" ]; then
+            echo "✅ latest 已指向 ${VERSION} (${TARGET})"
+          else
+            echo "⚠️ latest digest 与 ${VERSION} 不一致"
+            exit 1
+          fi
