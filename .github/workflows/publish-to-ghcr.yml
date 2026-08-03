@@ -1,11 +1,6 @@
 name: 🐳 publish-to-ghcr
 
 on:
-  push:
-    branches: [ main ]
-  schedule:
-    # 每天北京时间上午 10 点 (UTC 2 点) 自动执行一次检查并构建
-    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       komari_version:
