@@ -29,36 +29,31 @@ jobs:
             # 1. 如果是手动触发且输入了版本号，就用手填的
             VERSION="${{ github.event.inputs.komari_version }}"
           else
-            # 2. 否则（代码推送 或 定时任务），默认固定为 1.2.5-fix2
-            VERSION="1.2.5-fix2"
+            # 2. 否则（代码推送 或 定时任务），自动调用 GitHub API 获取上游最新 Release
+            VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/komari-monitor/komari/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+            # 容错：如果 /releases/latest 获取失败，尝试 /releases?per_page=1
+            if [ -z "$VERSION" ]; then
+              VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/komari-monitor/komari/releases?per_page=10" \
+                | python3 -c "
+              import json,sys
+              d=json.load(sys.stdin)
+              if isinstance(d,list):
+                  for r in d:
+                      if 'snapshot' not in r.get('tag_name','').lower():
+                          print(r.get('tag_name',''))
+                          break
+              " 2>/dev/null)
+            fi
+            # 如果仍然获取失败，跳过构建
+            if [ -z "$VERSION" ]; then
+              echo "错误：无法获取上游最新版本号，跳过构建"
+              echo "SKIP_BUILD=true" >> "$GITHUB_ENV"
+            fi
           fi
 
-          echo "本次构建的版本为: ${VERSION}"
+          echo "本次构建对应的上游版本为: ${VERSION:-（无）}"
           echo "KOMARI_VERSION=${VERSION}" >> "$GITHUB_ENV"
-
-      - name: 🚦 检查版本是否超过最大限制
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          VERSION="${{ env.KOMARI_VERSION }}"
-          MAX_VERSION="1.2.5-fix2"
-
-          # 比较版本：主.次.补丁 + 可选 fixN 后缀，全部按数字比较
-          if python3 -c '
-          import re, sys
-          def parse(v):
-              v = v.lower().lstrip("v")
-              m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:[-.]?fix(\d+))?", v)
-              return tuple(int(x) for x in m.groups(default=0)) if m else None
-          cur = parse(sys.argv[1])
-          mx = parse(sys.argv[2])
-          sys.exit(0 if (cur and mx and cur <= mx) else 1)
-          ' "${VERSION}" "${MAX_VERSION}"; then
-            echo "✅ 版本 ${VERSION} 在允许范围内（最大支持 ${MAX_VERSION}）"
-          else
-            echo "❌ 版本 ${VERSION} 超过最大支持版本 ${MAX_VERSION}，跳过构建"
-            echo "SKIP_BUILD=true" >> "$GITHUB_ENV"
-            exit 0
-          fi
 
       - name: 🏷️ Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -187,63 +182,39 @@ jobs:
         run: |
           IMAGE_NAME="${{ env.IMAGE_NAME }}"
           BUILD_VERSION="${{ env.KOMARI_VERSION }}"
-          ALLOWED_MAX="1.2.5-fix2"
 
           # 获取上游最大版本号
-          UPSTREAM_MAX=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          MAX_VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/komari-monitor/komari/releases?per_page=30" \
             | python3 -c "
           import re, sys, json
           releases = json.load(sys.stdin)
           def parse(v):
-              v = v.lower().lstrip('v')
-              m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:[-.]?fix(\d+))?', v)
-              return tuple(int(x) for x in m.groups(default=0)) if m else None
+              m = re.match(r'(\d+)\.(\d+)\.(\d+)', v)
+              return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)
           best = None
           for r in releases:
               tag = r.get('tag_name', '')
               if 'snapshot' in tag.lower():
                   continue
-              ver = parse(tag)
-              if ver is None:
-                  continue
               created = r.get('created_at', '')
+              ver = parse(tag)
               if best is None or ver > best[0] or (ver == best[0] and created > best[1]):
                   best = (ver, created, tag)
           print(best[2] if best else '')
           ")
 
-          # 有效最大版本 = 上游最大版本 与 允许最大版本 中的较小者
-          if python3 -c '
-          import re, sys
-          def parse(v):
-              v = v.lower().lstrip("v")
-              m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:[-.]?fix(\d+))?", v)
-              return tuple(int(x) for x in m.groups(default=0)) if m else None
-          up = parse(sys.argv[1])
-          mx = parse(sys.argv[2])
-          if up and mx and up > mx:
-              sys.exit(1)
-          sys.exit(0)
-          ' "${UPSTREAM_MAX}" "${ALLOWED_MAX}"; then
-            MAX_VERSION="${UPSTREAM_MAX}"
-            echo "上游最大版本 ${UPSTREAM_MAX} 在允许范围内，有效最大版本: ${MAX_VERSION}"
-          else
-            MAX_VERSION="${ALLOWED_MAX}"
-            echo "上游最大版本 ${UPSTREAM_MAX} 超过允许范围，latest 限定为 ${MAX_VERSION}"
-          fi
-
-          echo "有效最大版本: $MAX_VERSION"
+          echo "上游最大版本: $MAX_VERSION"
           echo "本次构建版本: $BUILD_VERSION"
 
           if [ "$BUILD_VERSION" = "$MAX_VERSION" ]; then
-            echo "本次构建版本是最大允许版本，设置 latest 标签"
+            echo "本次构建版本是最大版本，设置 latest 标签"
             docker buildx imagetools create \
               -t ${IMAGE_NAME}:latest \
               ${IMAGE_NAME}:${BUILD_VERSION}
             echo "latest 标签已指向 $BUILD_VERSION"
           else
-            echo "本次构建版本不是最大允许版本，不更新 latest 标签"
+            echo "本次构建版本不是最大版本，不更新 latest 标签"
           fi
 
       - name: 🧹 清理旧版本镜像
@@ -435,4 +406,4 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGE_NAME: ${{ github.event.repository.name }}
-          REPOSITORY: ${{ github.repository }}
+          REPOSITORY: ${{ github.repository }}          REPOSITORY: ${{ github.repository }}
