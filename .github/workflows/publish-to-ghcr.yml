@@ -406,4 +406,4 @@ jobs:
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGE_NAME: ${{ github.event.repository.name }}
-          REPOSITORY: ${{ github.repository }}          REPOSITORY: ${{ github.repository }}
+          REPOSITORY: ${{ github.repository }}
