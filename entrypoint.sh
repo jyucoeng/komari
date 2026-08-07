@@ -9,6 +9,9 @@ hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
 CRON_ENV_FILE="/app/cron_env.sh"
 CRONTAB_DIR="/etc/crontabs"
 CRONTAB_FILE="$CRONTAB_DIR/root"
+# 定时任务由 busybox crond 负责（镜像内随 busybox 包提供），动态解析路径防止 /bin 与 /usr/bin 差异
+CRON_BIN="$(command -v busybox 2>/dev/null || echo /usr/bin/busybox)"
+CRON_CMD="${CRON_BIN} crond -f -c ${CRONTAB_DIR}"
 BACKUP_SCRIPT="/app/backup.sh"
 RESTORE_SCRIPT="/app/restore.sh"
 RENEW_SCRIPT="/app/renew.sh"
@@ -482,7 +485,7 @@ serverurl=unix:///run/supervisor.sock
 supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 
 [program:cron]
-command=/bin/busybox crond -f -c /etc/crontabs
+command=CRON_CMD_PLACEHOLDER
 autostart=true
 autorestart=true
 stderr_logfile=/dev/stderr
@@ -572,6 +575,7 @@ DISABLE_REMOTE_EOF
 fi
 
 sed -i "s|CADDYFILE_PLACEHOLDER|$CADDYFILE|g" "$SUPERVISOR_CONF"
+sed -i "s|CRON_CMD_PLACEHOLDER|$CRON_CMD|g" "$SUPERVISOR_CONF"
 sed -i "s|CLOUDFLARED_CMD_PLACEHOLDER|$CLOUDFLARED_CMD|g" "$SUPERVISOR_CONF"
 if [ -n "${UUID:-}" ] && [ "$UUID" != "0" ]; then
     sed -i "s|XRAY_AUTOSTART_PLACEHOLDER|true|g" "$SUPERVISOR_CONF"

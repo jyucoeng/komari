@@ -7,7 +7,7 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash curl wget git sqlite3 jq tar supervisor coreutils unzip ca-certificates \
+      bash curl wget git sqlite3 jq tar supervisor coreutils unzip ca-certificates busybox \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
