@@ -14,6 +14,7 @@
 - **[7. 故障排查](#7-故障排查)** - 常见问题解决
 - **[8. 环境变量参考](#8-环境变量参考)** - 配置文档
 - **[9. 安全防护](#9-安全防护)** - 安全建议
+- **[10. 维护要点与变更记录](#10-维护要点与变更记录)** - 二次开发 / 排查前必读
 
 
 ---
@@ -546,6 +547,47 @@ backup
 
    备份脚本会在打包后立即检查体积：超过 100MB（GitHub 单文件上限）时直接报错退出，而不是等到推送阶段才失败。
 
+3. **超过阈值会自动分卷。** GitHub 对仓库内单个文件有 100MB 硬限制，因此当压缩后体积超过 `BACKUP_SPLIT_SIZE_MB`（默认 `95`）时，备份会被自动切成多卷：
+
+   ```
+   komari-2026-10-14-052117.tar.gz.part-00-of-03
+   komari-2026-10-14-052117.tar.gz.part-01-of-03
+   komari-2026-10-14-052117.tar.gz.part-02-of-03
+   ```
+
+   **还原时不需要任何额外配置** —— 备份库 `README.md` 里仍然只写不带分卷后缀的逻辑名（`komari-2026-10-14-052117.tar.gz`），`restore.sh` 会自动发现分卷、按序号拼接、再走原有的 sha256 校验与解压流程。每个文件名都带 `-of-MM`（总卷数），因此**缺卷会在解压前就被拦下**。
+
+   相关配置：
+
+   | 变量 | 默认值 | 说明 |
+   |---|---|---|
+   | `BACKUP_SPLIT_SIZE_MB` | `95` | 分卷阈值兼单卷大小（MB）。`0` = 禁用分卷 |
+   | `BACKUP_SPLIT_PRE_ESTIMATE` | `1` | 压缩前是否先估算体积（估算只影响走哪条路径，不影响最终结果） |
+   | `BACKUP_ESTIMATE_SAFETY_PCT` | `115` | 估算安全系数（%），宁可高估提前分卷 |
+
+   每次备份都会打印预估与实际体积，两种结果都会显示，方便你判断安全系数要不要调：
+
+   ```
+   正在估算压缩后体积...
+   预估压缩后约 10.3MB，未超过阈值 95MB → 按单文件压缩
+   正在压缩数据快照...
+   文件已压缩为: komari-2026-10-14-052117.tar.gz (10MB)
+   ```
+
+   预估本身不影响正确性（压缩完成后还会按**实测**大小复检，必要时就地切分或退回单文件），
+   所以偏差只影响走哪条路径。但如果**持续**偏离实际超过 ±50%，备份会额外打印一行建议，
+   提示上调或下调 `BACKUP_ESTIMATE_SAFETY_PCT`。默认配置下正常偏差在 +15%~+30%
+   （安全系数叠加保守的压缩率估算所致），不会刷屏。
+
+   手工合并分卷包：
+
+   ```bash
+   cat komari-2026-10-14-052117.tar.gz.part-* > komari.tar.gz
+   tar xzf komari.tar.gz
+   ```
+
+   > 手动删除备份时请把同一次的所有 `.part-*` 一起删除；脚本自身的过期清理会自动成组处理，不会留下孤儿分卷。
+
 ---
 
 <a id="6-更新和卸载"></a>
@@ -820,6 +862,9 @@ https://komari.example.com/550e8400-e29b-41d4-a716-446655440000
 | `BACKUP_DAYS` | `10` | 备份保留天数 |
 | `BACKUP_EXCLUDE_PATHS` | `backup` | 备份时整体排除的目录/文件（相对 `/app/data`，空格分隔） |
 | `LOCAL_BACKUP_FILE_HISTORY_NUM` | `3` | 本地历史备份保留数量（`/app/data/backup`）；`0` 表示不清理 |
+| `BACKUP_SPLIT_SIZE_MB` | `95` | 分卷阈值兼单卷大小（MB）；`0` 表示禁用分卷 |
+| `BACKUP_SPLIT_PRE_ESTIMATE` | `1` | 压缩前是否估算体积（`0` = 直接压缩后按实测决定） |
+| `BACKUP_ESTIMATE_SAFETY_PCT` | `115` | 估算安全系数（百分比） |
 | `CADDY_PROXY_PORT` | `8001` | Caddy 监听端口 |
 | `KOMARI_DISABLE_WEB_SSH` | `1` | 设为 `0` 启用 Web SSH |
 | `KOMARI_DISABLE_REMOTE` | `1` | 设为 `0` 启用远程命令 |
@@ -868,6 +913,98 @@ https://komari.example.com/550e8400-e29b-41d4-a716-446655440000
 - ✅ **只在需要时启用 Web SSH** - 默认关闭更安全
 - ✅ **限制远程命令功能** - 默认关闭，必要时才启用
 - ✅ **定期备份配置** - 使用 GitHub 备份功能
+
+---
+
+<a id="10-维护要点与变更记录"></a>
+
+## 10. 维护要点与变更记录
+
+本节面向**二次开发与排查**：记录备份/还原脚本里那些「看代码看不出来为什么」的约定，
+以及历次行为变更。改动 `backup.sh` / `restore.sh` 前建议先过一遍 10.1。
+
+### 10.1 维护要点（改代码前必读）
+
+这些约定都有具体的事故或测试作为依据，**不是风格偏好**：
+
+| # | 约定 | 破坏后果 | 为什么 |
+|---|---|---|---|
+| 1 | 备份库 `README.md` **只写不带分卷后缀的逻辑名** | 所有人的还原配置失效 | 它是用户侧的还原接口。分卷、整包统一用逻辑名寻址，用户改阈值/分卷形态都不需要动它 |
+| 2 | 拒绝类校验必须发生在 `replace_data_dir()` **之前** | 数据目录已被清空才发现包不可用 | `replace_data_dir()` 会先 `rm -rf "$DATA_DIR"/*` 再解压，之后没有退路 |
+| 3 | 分卷文件名必须带 `-of-MM`（总卷数） | **缺尾卷检测不出来** | 自动还原路径下 Contents API 只给 blob sha、拿不到可信 sha256，序号连续性检查发现不了「少了最后一卷」，总卷数是唯一依据 |
+| 4 | 不要用 `dd` 从管道切分（要凑满一整块） | 每个分卷都残缺 | `dd bs=1M count=1` 从管道读遇到短读就认为一块读完，实际只写 128KB。凑满需要 GNU 专有的 `iflag=fullblock`，busybox 不支持 → 用 `head -c` |
+| 5 | 多行输出不要用 `printf '%s'` + `while read` | **静默少处理一项** | 命令替换会吃掉末尾换行，最后一行读不到（曾导致分卷还原少最后一卷） |
+| 6 | 统计类循环要用进程替换 `< <(...)` 而不是管道 | 计数器永远是 0 | 管道会让 `while` 跑在子 shell 里，循环内的赋值传不出来 |
+| 7 | `data/backup` 必须在排除列表里 | 包体随备份次数线性膨胀 | 面板自身的历史备份 zip 会被逐个打包进新包（曾导致 93.8MB 包 + OOM） |
+| 8 | `configure_git_memory_limits()` 不能去掉 | 推送阶段被内核 OOM 杀死 | 容器内存 512MB，常驻已占约 267MB；git 打包/增量压缩是峰值最高的一步 |
+| 9 | 估算**不参与正确性**，`[B2]` 实测复检不能省 | 估算偏差会变成错误结果 | 估算只决定走哪条压缩路径；最终产出由压缩后的实测大小决定（估低就地切分、估高退回单文件） |
+| 10 | 校验/解压/替换数据目录三处与分卷**无关** | 分卷改造会波及还原主链路 | 拼接后的文件与原始归档逐字节相同，这几处不需要感知分卷 —— 这是分卷方案风险可控的关键 |
+
+### 10.2 关键位置速查
+
+`backup.sh`
+
+| 函数 | 职责 |
+|---|---|
+| `validate_config()` | 配置校验（含 `BACKUP_SPLIT_SIZE_MB` 取值域 0 或 1–99） |
+| `create_data_snapshot()` | 建快照；含排除与 SQLite 一致性快照 |
+| `remove_excluded_paths_from_stage()` | 按 `BACKUP_EXCLUDE_PATHS` 排除并清理空目录 |
+| `estimate_compressed_size()` | 压缩前估算（按扩展名四类加权，只读文件大小） |
+| `describe_estimate()` / `describe_estimate_drift()` | 估算结果的屏幕提示与校准建议 |
+| `split_stream()` | 流式切分（边压缩边切，峰值磁盘减半） |
+| `split_archive_file()` | 对已存在归档就地切分（实测超阈值的兜底） |
+| `finalize_parts()` | 按实际卷数重命名成 `-of-MM`；单卷则退回普通文件名 |
+| `list_repo_backup_raw_files()` / `list_repo_backup_files()` | 列出仓库备份文件 / 归并成逻辑名集合 |
+| `repo_files_for_backup()` | 展开某次备份的全部文件（整包或全部分卷），供成组删除 |
+| `cleanup_old_backups()` | 按 `BACKUP_DAYS` 过期，**成组删除** |
+| `cleanup_local_backup_history()` | 按 `LOCAL_BACKUP_FILE_HISTORY_NUM` 清理本地历史包 |
+| `mark_local_restore_state()` | 写本地状态（逻辑名 + **完整归档**的 sha256） |
+
+`restore.sh`
+
+| 函数 | 职责 |
+|---|---|
+| `parse_dir_listing()` / `list_repo_root()` | 解析目录列举（自带极简 JSON 解析，不依赖 `jq`） |
+| `list_backup_parts()` | 发现分卷并做完整性校验（总卷数一致 / 序号连续 / 卷数吻合） |
+| `get_file_metadata_direct()` | 取期望大小：整包取 `size`，分卷取各卷之和 |
+| `download_backup_file()` | 先试整包，失败再逐卷下载并校验大小、按序拼接 |
+| `verify_download()` | 大小 / sha256 / tar 有效性 / 成员路径校验（**与分卷无关**） |
+| `replace_data_dir()` | 替换数据目录（**先清空，之后没有退路**） |
+
+### 10.3 变更记录
+
+| PR | 时间（UTC） | 改了什么 | 为什么 | 涉及位置 |
+|---|---|---|---|---|
+| [#23](https://github.com/jyucoeng/komari/pull/23) | 10-14 06:09 | 默认排除 `data/backup`；限制 git 内存占用；新增 `LOCAL_BACKUP_FILE_HISTORY_NUM`；补齐清理日志 | 面板历史备份被递归打包 → 包体膨胀，推送阶段 OOM；排除后本地历史包又无人清理 | `remove_excluded_paths_from_stage()`、`configure_git_memory_limits()`、`cleanup_local_backup_history()` |
+| [#24](https://github.com/jyucoeng/komari/pull/24) | 10-14 10:42 | **备份分卷**：超阈值自动切分上传，还原侧自动拼接；估算值上屏与校准建议；新增《维护要点与变更记录》 | GitHub 单文件 100MB 硬限，超过后备份会持续失败 | `estimate_compressed_size()`、`split_stream()`、`split_archive_file()`、`finalize_parts()`、`list_backup_parts()`、`download_backup_file()` |
+
+> 上表只列**行为变更**。纯文档、措辞调整不在此列 —— 那些看 `git log` 即可。
+>
+> 本仓库对应 Komari **1.2.5 及以下**；1.3.2 及以上的版本请看
+> [komari-new](https://github.com/jyucoeng/komari-new)。两者的备份脚本结构相近，
+> 但本仓库**没有** `BACKUP_EXCLUDE_DBS`（按数据库名排除）这一项。
+
+### 10.4 排障入口
+
+| 位置 | 内容 |
+|---|---|
+| `/tmp/backup.log`（Docker）/ `${WORK_DIR}/logs/backup.log`（VPS） | 备份日志，含 `压缩前估算: N 字节` 与 `备份文件: … parts=N` |
+| `/tmp/restore.log` | 自动还原看门狗日志，每分钟一条 |
+| `/tmp/last_restore`（Docker）/ `${WORK_DIR}/logs/last_restore`（VPS） | 本地状态：`<逻辑名> <sha256>`。看门狗靠它判断「是否需要还原」 |
+| `/sys/fs/cgroup/memory.events` | `oom` / `oom_kill` 计数（**每次容器启动重置**，重启后看到的 0 不代表之前没被杀过） |
+| `/sys/fs/cgroup/memory.peak` | 峰值内存，与 512MB 上限对比可判断余量 |
+
+只想验证分卷逻辑而不想等真实数据涨到阈值，可以在容器里临时改阈值：
+
+```bash
+BACKUP_SPLIT_SIZE_MB=1 bash /app/backup.sh          # 强制分卷
+DATA_DIR=/tmp/rtest/data WORK_DIR=/tmp/rtest/work \
+RESTORE_STATE_FILE=/tmp/rtest/last_restore KOMARI_RESTORE_SKIP_RESTART=1 \
+bash /app/restore.sh komari-<时间>.tar.gz            # 隔离还原，不碰生产数据
+```
+
+> `renew.sh` 每天会用 `KOMARI_SOURCE_REPOSITORY`（默认 `jyucoeng/komari`）覆盖 `/app/backup.sh`。
+> **在容器里手改脚本不会保留**；要立刻生效请把该变量指向你自己的仓库。
 
 ---
 

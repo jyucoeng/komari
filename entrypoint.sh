@@ -173,6 +173,10 @@ write_cron_config() {
         # 否则定时任务读不到，只有手工执行 backup.sh 时才会生效。
         write_cron_env_var BACKUP_EXCLUDE_PATHS
         write_cron_env_var LOCAL_BACKUP_FILE_HISTORY_NUM
+        # 分卷相关配置也要写入，否则定时任务会退回脚本内置默认值
+        write_cron_env_var BACKUP_SPLIT_SIZE_MB
+        write_cron_env_var BACKUP_SPLIT_PRE_ESTIMATE
+        write_cron_env_var BACKUP_ESTIMATE_SAFETY_PCT
         write_cron_env_var KOMARI_LOCK_TIMEOUT_SECONDS
         write_cron_env_var NO_AUTO_RENEW
         write_cron_env_var TZ

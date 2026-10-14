@@ -32,6 +32,11 @@ services:
       BACKUP_EXCLUDE_PATHS: "${BACKUP_EXCLUDE_PATHS:-backup}"
       # 本地历史备份保留数量（/app/data/backup）；0 表示不清理
       LOCAL_BACKUP_FILE_HISTORY_NUM: "${LOCAL_BACKUP_FILE_HISTORY_NUM:-3}"
+      # 分卷阈值兼单卷大小（MB）；0 表示禁用分卷
+      BACKUP_SPLIT_SIZE_MB: "${BACKUP_SPLIT_SIZE_MB:-95}"
+      # 压缩前估算开关（1/0）与安全系数（%）
+      BACKUP_SPLIT_PRE_ESTIMATE: "${BACKUP_SPLIT_PRE_ESTIMATE:-1}"
+      BACKUP_ESTIMATE_SAFETY_PCT: "${BACKUP_ESTIMATE_SAFETY_PCT:-115}"
       KOMARI_LOCK_TIMEOUT_SECONDS: "${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
 
       # 脚本更新配置（可选）

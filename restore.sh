@@ -248,6 +248,96 @@ contents_url() {
     printf 'https://api.github.com/repos/%s/%s/contents/%s?ref=%s\n' "$GH_BACKUP_USER" "$GH_REPO" "$path" "$GH_BACKUP_BRANCH"
 }
 
+# 仓库根目录的列举地址（注意末尾没有斜杠）
+root_contents_url() {
+    printf 'https://api.github.com/repos/%s/%s/contents?ref=%s\n' "$GH_BACKUP_USER" "$GH_REPO" "$GH_BACKUP_BRANCH"
+}
+
+# 把目录列举的 JSON 拆成 "名称 大小" 行。
+# 只按对象边界切分后取 "name"/"size" 两个字段，因此不依赖 jq（容器里不一定有）。
+# 仓库根目录都是普通文件、字段是扁平的，用这个解析足够。
+parse_dir_listing() {
+    tr '{' '\n' | awk '
+        {
+            name = ""; size = ""
+            if (match($0, /"name"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+                name = substr($0, RSTART, RLENGTH)
+                sub(/.*"name"[[:space:]]*:[[:space:]]*"/, "", name)
+                sub(/"$/, "", name)
+            }
+            if (match($0, /"size"[[:space:]]*:[[:space:]]*[0-9]+/)) {
+                size = substr($0, RSTART, RLENGTH)
+                sub(/.*:[[:space:]]*/, "", size)
+            }
+            if (name != "") print name, size
+        }'
+}
+
+list_repo_root() {
+    api_get "$(root_contents_url)" 2>/dev/null | parse_dir_listing
+}
+
+# 发现某个逻辑名对应的分卷并做完整性校验，输出 "<文件名> <大小>"（按序号升序）。
+# 校验项：总卷数声明一致、序号自 00 起连续、实际卷数与 -of-MM 一致。
+# 任一项不通过就返回非零，绝不进入解压阶段。
+list_backup_parts() {
+    local logical="$1"
+    local listing name size idx mm expect_mm="" found=0 collected=""
+
+    listing=$(list_repo_root) || return 1
+    [ -n "$listing" ] || return 1
+
+    while IFS=' ' read -r name size; do
+        [ -n "$name" ] || continue
+        case "$name" in
+            "$logical".part-[0-9][0-9]-of-[0-9][0-9]) ;;
+            *) continue ;;
+        esac
+        idx=$(printf '%s' "$name" | sed -E 's/.*\.part-([0-9]{2})-of-[0-9]{2}$/\1/')
+        mm=$(printf '%s' "$name" | sed -E 's/.*\.part-[0-9]{2}-of-([0-9]{2})$/\1/')
+        if [ -z "$expect_mm" ]; then
+            expect_mm="$mm"
+        elif [ "$mm" != "$expect_mm" ]; then
+            log "分卷总卷数声明不一致：$name 为 -of-$mm，其余为 -of-$expect_mm"
+            return 1
+        fi
+        found=$((found + 1))
+        collected="${collected}${idx} ${name} ${size}
+"
+    done <<EOF
+$listing
+EOF
+
+    [ "$found" -gt 0 ] || return 1
+
+    # 序号必须自 00 起连续 —— 拦住「缺中间卷」
+    local expect=0 ordered
+    ordered=$(printf '%s' "$collected" | sort -n)
+    while IFS=' ' read -r idx name size; do
+        [ -n "$idx" ] || continue
+        if [ "$idx" != "$(printf '%02d' "$expect")" ]; then
+            log "分卷序号不连续：期望 part-$(printf '%02d' "$expect")，实际 part-$idx"
+            return 1
+        fi
+        expect=$((expect + 1))
+    done <<EOF
+$ordered
+EOF
+
+    # 实际卷数必须与 -of-MM 一致 —— 拦住「缺尾卷」
+    if [ "$expect" != "$((10#$expect_mm))" ]; then
+        log "分卷数量不符：-of-$expect_mm 声明 $((10#$expect_mm)) 卷，实际只有 $expect 卷"
+        return 1
+    fi
+
+    # 注意用 '%s\n'：命令替换会吃掉末尾换行，若不加换行，
+    # while read 会读不到最后一行（正是缺失的那一卷）。
+    printf '%s\n' "$ordered" | while IFS=' ' read -r idx name size; do
+        [ -n "$name" ] || continue
+        printf '%s %s\n' "$name" "$size"
+    done
+}
+
 read_backup_readme() {
     api_get_raw "$(contents_url README.md)" 2>/dev/null || true
 }
@@ -335,20 +425,34 @@ get_latest_backup_from_listing() {
 
 get_file_metadata_direct() {
     local filename="$1"
-    local metadata api_size
+    local metadata api_size parts name size total
 
     valid_backup_filename "$filename" || error "备份文件名非法: $filename"
 
     metadata=$(api_get "$(contents_url "$filename")" 2>/dev/null || true)
-    if [ -z "$metadata" ]; then
-        return 1
+    if [ -n "$metadata" ]; then
+        api_size=$(printf "%s" "$metadata" | json_value size)
+        if valid_size "$api_size"; then
+            # GitHub contents API 的 sha 是 blob sha，不是文件 sha256。sha256 会在下载后计算。
+            printf '%s %s %s\n' "$filename" "unknown" "$api_size"
+            return 0
+        fi
     fi
 
-    api_size=$(printf "%s" "$metadata" | json_value size)
-    valid_size "$api_size" || return 1
+    # 整包不存在 —— 可能是分卷备份：列一次目录，把各卷大小汇总当作期望大小。
+    if parts=$(list_backup_parts "$filename" 2>/dev/null) && [ -n "$parts" ]; then
+        total=0
+        while IFS=' ' read -r name size; do
+            [ -n "$name" ] || continue
+            valid_size "$size" && total=$((total + size))
+        done <<EOF
+$parts
+EOF
+        printf '%s %s %s\n' "$filename" "unknown" "$total"
+        return 0
+    fi
 
-    # GitHub contents API 的 sha 是 blob sha，不是文件 sha256。sha256 会在下载后计算。
-    printf '%s %s %s\n' "$filename" "unknown" "$api_size"
+    return 1
 }
 
 get_file_metadata() {
@@ -556,8 +660,57 @@ verify_download() {
 download_backup_file() {
     local backup_file="$1"
     local output="$2"
+    local parts name size tmpdir actual failed=0
 
-    raw_download "$(contents_url "$backup_file")" "$output" || error "下载备份文件失败: $backup_file"
+    # 先按整包下载：未分卷的备份（含历史遗留的整包）走这条路径，行为与改造前一致
+    if raw_download "$(contents_url "$backup_file")" "$output" 2>/dev/null; then
+        return 0
+    fi
+
+    # 整包不存在 —— 按分卷处理
+    parts=$(list_backup_parts "$backup_file") \
+        || error "未找到可用的备份：$backup_file（整包与分卷都不存在，或分卷不完整/序号断裂）。"
+    tmpdir=$(mktemp -d /tmp/komari_restore_parts.XXXXXX) || error "无法创建分卷临时目录。"
+
+    # 各卷先下载到独立临时文件并逐个校验大小，便于定位是哪一卷出的问题
+    while IFS=' ' read -r name size; do
+        [ -n "$name" ] || continue
+        hint "正在下载分卷: $name"
+        if ! raw_download "$(contents_url "$name")" "$tmpdir/$name"; then
+            log "分卷下载失败: $name"
+            failed=1
+            break
+        fi
+        if valid_size "$size"; then
+            actual=$(wc -c < "$tmpdir/$name" | tr -d ' ')
+            if [ "$actual" != "$size" ]; then
+                log "分卷大小不符: $name（期望 $size，实际 $actual）"
+                failed=1
+                break
+            fi
+        fi
+        printf '%s\n' "$tmpdir/$name" >> "$tmpdir/.order"
+    done <<EOF
+$parts
+EOF
+
+    if [ "$failed" != "0" ]; then
+        rm -rf "$tmpdir"
+        error "下载分卷失败，已中止还原。"
+    fi
+
+    # 按序号顺序拼接成完整的 tar.gz，之后的校验/解压流程完全不用感知分卷
+    hint "正在拼接分卷..."
+    : > "$output"
+    while IFS= read -r part_file; do
+        [ -n "$part_file" ] || continue
+        if ! cat "$part_file" >> "$output"; then
+            rm -rf "$tmpdir"
+            error "拼接分卷失败。"
+        fi
+    done < "$tmpdir/.order"
+
+    rm -rf "$tmpdir"
 }
 
 replace_data_dir() {
