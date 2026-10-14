@@ -531,6 +531,20 @@ backup
 | 备份保留多久？ | 由 `BACKUP_DAYS` 控制，默认 10 天，过期自动删除 |
 | 能否修改备份时间？ | 可以，修改 `BACKUP_TIME`（UTC cron 表达式） |
 | 是否支持手动触发备份？ | 支持，使用对应环境的命令立即执行备份 |
+| 备份仓库为什么会变得很大？ | 每次备份都会新增一个**完整的 tar.gz 二进制对象**，git 历史不会自动去重，所以仓库体积 ≈ 单包大小 × 备份次数。请控制 `BACKUP_TIME` 的频率与 `BACKUP_DAYS` 的乘积，并用 `BACKUP_EXCLUDE_PATHS` 排除不必要的内容（详见下节） |
+
+#### 备份体积与内存注意事项
+
+备份是「打包整个 `/app/data` 目录 → 压缩 → 提交到备份仓库」，因此有两个容易踩的坑：
+
+1. **不要把备份包再备份一遍。** 面板自身会在 `data/backup` 下存放历史备份 zip（`backup-*.zip`、`upgrade-*.zip` 等）。如果不排除该目录，每个新备份都会把之前的备份一起打进去，单包体积随运行次数线性增长。默认值 `BACKUP_EXCLUDE_PATHS="backup"` 已处理这一项；如果你的主题、插件都可以重新下载，可以进一步收紧：
+   ```bash
+   BACKUP_EXCLUDE_PATHS="backup theme plugin-data"
+   ```
+   由于 `data/backup` 不再进入备份包，它就成了一份**纯本地**的历史记录，需要单独控制保留数量：每次备份时都会按修改时间只保留最新的 `LOCAL_BACKUP_FILE_HISTORY_NUM` 个（默认 3），更早的自动删除。设为 `0` 可关闭该清理、保留全部。手工执行 `bash backup.sh` 与定时任务走的是同一套逻辑，都会触发这次清理。
+2. **备份频率 × 保留天数 = 仓库里累积的包数量。** 例如 `BACKUP_TIME="0 */4 * * *"`（每 4 小时）配合 `BACKUP_DAYS=15`，最多会留下 90 个包；若单包 90MB，仓库就会达到 GB 级。而备份过程中的 `git add / commit / push` 是内存占用最高的一步——在小内存容器里（例如 512MB）很容易被内核 OOM 杀死，表现为**终端输出停在半途、随后 Web Shell 断开**，但脚本本身并不会打印任何错误。建议保持默认的每天一次，并让 `BACKUP_DAYS` 与实际需要匹配。
+
+   备份脚本会在打包后立即检查体积：超过 100MB（GitHub 单文件上限）时直接报错退出，而不是等到推送阶段才失败。
 
 ---
 
@@ -804,6 +818,8 @@ https://komari.example.com/550e8400-e29b-41d4-a716-446655440000
 | `BACKUP_TIME` | `0 20 * * *` | UTC cron 表达式；`0 */8 * * *` 对应北京时间 08:00/16:00/00:00 |
 | `GH_EMAIL` | `${GH_BACKUP_USER}@users.noreply.github.com` | Git 提交邮箱，可不填 |
 | `BACKUP_DAYS` | `10` | 备份保留天数 |
+| `BACKUP_EXCLUDE_PATHS` | `backup` | 备份时整体排除的目录/文件（相对 `/app/data`，空格分隔） |
+| `LOCAL_BACKUP_FILE_HISTORY_NUM` | `3` | 本地历史备份保留数量（`/app/data/backup`）；`0` 表示不清理 |
 | `CADDY_PROXY_PORT` | `8001` | Caddy 监听端口 |
 | `KOMARI_DISABLE_WEB_SSH` | `1` | 设为 `0` 启用 Web SSH |
 | `KOMARI_DISABLE_REMOTE` | `1` | 设为 `0` 启用远程命令 |

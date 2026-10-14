@@ -169,6 +169,10 @@ write_cron_config() {
         write_cron_env_var GH_EMAIL
         write_cron_env_var BACKUP_TIME
         write_cron_env_var BACKUP_DAYS
+        # 备份排除项与本地保留数量必须一并写入 cron 环境文件，
+        # 否则定时任务读不到，只有手工执行 backup.sh 时才会生效。
+        write_cron_env_var BACKUP_EXCLUDE_PATHS
+        write_cron_env_var LOCAL_BACKUP_FILE_HISTORY_NUM
         write_cron_env_var KOMARI_LOCK_TIMEOUT_SECONDS
         write_cron_env_var NO_AUTO_RENEW
         write_cron_env_var TZ

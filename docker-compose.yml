@@ -28,6 +28,10 @@ services:
       # 备份时间配置（可选）
       BACKUP_TIME: "${BACKUP_TIME:-0 20 * * *}"
       BACKUP_DAYS: "${BACKUP_DAYS:-10}"
+      # 备份排除项（相对 /app/data，空格分隔）；默认排除面板自身的历史备份目录
+      BACKUP_EXCLUDE_PATHS: "${BACKUP_EXCLUDE_PATHS:-backup}"
+      # 本地历史备份保留数量（/app/data/backup）；0 表示不清理
+      LOCAL_BACKUP_FILE_HISTORY_NUM: "${LOCAL_BACKUP_FILE_HISTORY_NUM:-3}"
       KOMARI_LOCK_TIMEOUT_SECONDS: "${KOMARI_LOCK_TIMEOUT_SECONDS:-60}"
 
       # 脚本更新配置（可选）
