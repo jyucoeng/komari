@@ -66,6 +66,11 @@ NO_ACTION_FLAG="${KOMARI_NO_ACTION_FLAG:-/tmp/komari-no-action}"
 info() { echo -e "\033[32m\033[01m$*\033[0m"; }
 error() { log "ERROR: $*"; echo -e "\033[31m\033[01m$*\033[0m" >&2; exit 1; }
 hint() { echo -e "\033[33m\033[01m$*\033[0m"; }
+# 诊断信息：既写日志，也写 stderr。
+# 必须走 stderr 而不是 stdout/hint —— list_backup_parts 是经命令替换调用的
+# （$(...) 里是子 shell），它的 stdout 会被调用方吃掉，只有 stderr 能穿透到屏幕。
+# 而自动还原路径对同一处调用显式加了 2>/dev/null，因此看门狗不会被刷屏。
+diag() { log "$*"; printf '%s\n' "$*" >&2; }
 
 DOWNLOAD_PATH=""
 EXTRACT_DIR=""
@@ -298,7 +303,7 @@ list_backup_parts() {
         if [ -z "$expect_mm" ]; then
             expect_mm="$mm"
         elif [ "$mm" != "$expect_mm" ]; then
-            log "分卷总卷数声明不一致：$name 为 -of-$mm，其余为 -of-$expect_mm"
+            diag "分卷总卷数声明不一致：$name 为 -of-$mm，其余为 -of-$expect_mm"
             return 1
         fi
         found=$((found + 1))
@@ -316,7 +321,7 @@ EOF
     while IFS=' ' read -r idx name size; do
         [ -n "$idx" ] || continue
         if [ "$idx" != "$(printf '%02d' "$expect")" ]; then
-            log "分卷序号不连续：期望 part-$(printf '%02d' "$expect")，实际 part-$idx"
+            diag "分卷序号不连续：期望 part-$(printf '%02d' "$expect")，实际 part-$idx（可能缺少了中间的某一卷）"
             return 1
         fi
         expect=$((expect + 1))
@@ -326,7 +331,7 @@ EOF
 
     # 实际卷数必须与 -of-MM 一致 —— 拦住「缺尾卷」
     if [ "$expect" != "$((10#$expect_mm))" ]; then
-        log "分卷数量不符：-of-$expect_mm 声明 $((10#$expect_mm)) 卷，实际只有 $expect 卷"
+        diag "分卷数量不符：-of-$expect_mm 声明 $((10#$expect_mm)) 卷，实际只有 $expect 卷（可能缺少最后一卷）"
         return 1
     fi
 
@@ -931,7 +936,10 @@ manual_restore() {
     check_env
     acquire_lock
 
-    file_state=$(get_file_metadata "$backup_file") || error "无法获取备份文件信息: $backup_file"
+    # 元数据取不到时给出可操作的提示。分卷备份的常见原因是缺卷，
+    # 具体缺哪一卷由 list_backup_parts() 通过 stderr 打印（见上面 diag 的说明）。
+    file_state=$(get_file_metadata "$backup_file") \
+        || error "无法获取备份文件信息: $backup_file（若这是分卷备份，请检查分卷是否完整；缺卷的具体原因见上方提示或 $RESTORE_LOG）"
     file_size=$(printf "%s" "$file_state" | awk '{print $3}')
     expected_sha256=""
     expected_size="$file_size"

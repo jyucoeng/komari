@@ -939,6 +939,7 @@ https://komari.example.com/550e8400-e29b-41d4-a716-446655440000
 | 8 | `configure_git_memory_limits()` 不能去掉 | 推送阶段被内核 OOM 杀死 | 容器内存 512MB，常驻已占约 267MB；git 打包/增量压缩是峰值最高的一步 |
 | 9 | 估算**不参与正确性**，`[B2]` 实测复检不能省 | 估算偏差会变成错误结果 | 估算只决定走哪条压缩路径；最终产出由压缩后的实测大小决定（估低就地切分、估高退回单文件） |
 | 10 | 校验/解压/替换数据目录三处与分卷**无关** | 分卷改造会波及还原主链路 | 拼接后的文件与原始归档逐字节相同，这几处不需要感知分卷 —— 这是分卷方案风险可控的关键 |
+| 11 | 还原侧的诊断信息走 `diag()`（写 stderr），**不要**改成 `hint()` | 用户只看到笼统的「无法获取备份文件信息」，不知道缺了哪一卷 | `list_backup_parts()` 是经**命令替换**调用的（子 shell），stdout 会被调用方吃掉，只有 stderr 能穿透到屏幕；而自动还原路径对该调用显式加了 `2>/dev/null`，因此走 stderr 同时保证**看门狗不被刷屏** |
 
 ### 10.2 关键位置速查
 
@@ -964,6 +965,7 @@ https://komari.example.com/550e8400-e29b-41d4-a716-446655440000
 
 | 函数 | 职责 |
 |---|---|
+| `diag()` | 诊断信息：写日志 + 写 **stderr**（见 10.1 第 11 条） |
 | `parse_dir_listing()` / `list_repo_root()` | 解析目录列举（自带极简 JSON 解析，不依赖 `jq`） |
 | `list_backup_parts()` | 发现分卷并做完整性校验（总卷数一致 / 序号连续 / 卷数吻合） |
 | `get_file_metadata_direct()` | 取期望大小：整包取 `size`，分卷取各卷之和 |
@@ -976,7 +978,7 @@ https://komari.example.com/550e8400-e29b-41d4-a716-446655440000
 | PR | 时间（UTC） | 改了什么 | 为什么 | 涉及位置 |
 |---|---|---|---|---|
 | [#23](https://github.com/jyucoeng/komari/pull/23) | 10-14 06:09 | 默认排除 `data/backup`；限制 git 内存占用；新增 `LOCAL_BACKUP_FILE_HISTORY_NUM`；补齐清理日志 | 面板历史备份被递归打包 → 包体膨胀，推送阶段 OOM；排除后本地历史包又无人清理 | `remove_excluded_paths_from_stage()`、`configure_git_memory_limits()`、`cleanup_local_backup_history()` |
-| [#24](https://github.com/jyucoeng/komari/pull/24) | 10-14 10:42 | **备份分卷**：超阈值自动切分上传，还原侧自动拼接；估算值上屏与校准建议；新增《维护要点与变更记录》 | GitHub 单文件 100MB 硬限，超过后备份会持续失败 | `estimate_compressed_size()`、`split_stream()`、`split_archive_file()`、`finalize_parts()`、`list_backup_parts()`、`download_backup_file()` |
+| [#24](https://github.com/jyucoeng/komari/pull/24) | 10-14 ~ 10-15 | **备份分卷**：超阈值自动切分上传，还原侧自动拼接；估算值上屏与校准建议；新增《维护要点与变更记录》；**还原拒绝信息带上具体缺卷原因**（新增 `diag()` 走 stderr） | GitHub 单文件 100MB 硬限，超过后备份会持续失败；缺卷时屏幕只说「无法获取备份文件信息」，用户分不清「备份不存在」和「备份不完整」 | `estimate_compressed_size()`、`split_stream()`、`split_archive_file()`、`finalize_parts()`、`list_backup_parts()`、`download_backup_file()`、`diag()` |
 
 > 上表只列**行为变更**。纯文档、措辞调整不在此列 —— 那些看 `git log` 即可。
 >
